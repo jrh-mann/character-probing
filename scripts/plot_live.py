@@ -235,3 +235,134 @@ if len(result_csvs) >= 2:
     fig.savefig(FIGS / "scaling_curve.png", dpi=150, bbox_inches="tight")
     fig.savefig(FIGS / "scaling_curve.pdf", bbox_inches="tight")
     print(f"Saved {FIGS / 'scaling_curve.png'}")
+
+# ── Layer-by-layer accuracy ─────────────────────────────────────────────
+if result_csvs:
+    import matplotlib.pyplot as plt
+    plt.rcParams.update({
+        'figure.facecolor': '#1a1a2e', 'axes.facecolor': '#1a1a2e',
+        'axes.edgecolor': '#444', 'axes.labelcolor': '#ddd',
+        'text.color': '#ddd', 'xtick.color': '#aaa', 'ytick.color': '#aaa',
+        'grid.color': '#333', 'grid.alpha': 0.5,
+    })
+    dfs = []
+    for c in result_csvs:
+        d = pd.read_csv(c)
+        # Tag with filename to distinguish chat vs non-chat
+        fname = c.stem.replace("_per_layer_results", "")
+        d["source"] = fname
+        dfs.append(d)
+    all_lr = pd.concat(dfs, ignore_index=True)
+    # Only EMA strategy for clarity
+    ema_df = all_lr[all_lr["strategy"] == "ema"].copy()
+
+    # Normalise layer index to [0, 1] so models with different depths are comparable
+    def get_total_layers(model_name):
+        s = model_name.split("/")[-1].replace("Qwen2.5-","").replace("-Instruct","").replace("_chat","")
+        size = float(s.replace("B",""))
+        # Qwen2.5 layer counts
+        return {0.5: 24, 1.5: 28, 3: 36, 7: 28, 14: 40}.get(size, 32)
+
+    ema_df["total_layers"] = ema_df["model_name"].apply(get_total_layers)
+    ema_df["layer"] = pd.to_numeric(ema_df["layer"], errors="coerce")
+    ema_df["layer_frac"] = ema_df["layer"] / ema_df["total_layers"]
+
+    # Short display name from source (filename-based)
+    def short_name(s):
+        return s.replace("Qwen2.5-", "")
+    ema_df["short"] = ema_df["source"].apply(short_name)
+
+    # Color by model size, style by variant
+    SIZE_COLORS = {"0.5B": "#66c2a5", "1.5B": "#fc8d62", "3B": "#8da0cb", "7B": "#e78ac3", "14B": "#a6d854"}
+    def get_size_key(name):
+        for k in ["0.5B", "1.5B", "3B", "7B", "14B"]:
+            if k in name: return k
+        return "?"
+
+    tasks = ["age_bin", "gender", "star_sign"]
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle("Probe Accuracy by Layer (EMA Linear, all models)", fontsize=16, fontweight='bold')
+
+    for ax, task in zip(axes, tasks):
+        ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
+        ax.set_xlabel("Relative Layer Depth"); ax.set_ylabel("Balanced Accuracy")
+        ax.grid(True, alpha=0.3)
+        chance = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
+        ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
+
+        tdf = ema_df[ema_df["task"] == task]
+        for model_short in sorted(tdf["short"].unique()):
+            mdf = tdf[tdf["short"] == model_short].sort_values("layer_frac")
+            sk = get_size_key(model_short)
+            is_it = "Instruct" in model_short
+            is_chat = "chat" in model_short
+            ls = ":" if is_chat else ("--" if is_it else "-")
+            ax.plot(mdf["layer_frac"], mdf["text_balanced_acc"],
+                    marker="o", markersize=4, linewidth=1.5,
+                    color=SIZE_COLORS.get(sk, "#999"), linestyle=ls,
+                    label=model_short)
+
+        ax.legend(fontsize=7, loc="best", facecolor='#1a1a2e', edgecolor='#444', ncol=2)
+
+    plt.tight_layout()
+    fig.savefig(FIGS / "layer_by_layer_acc.png", dpi=150, bbox_inches="tight")
+    fig.savefig(FIGS / "layer_by_layer_acc.pdf", bbox_inches="tight")
+    print(f"Saved {FIGS / 'layer_by_layer_acc.png'}")
+
+    # ── Layer-by-layer: base models only ─────────────────────────────────
+    base_df = ema_df[~ema_df["source"].str.contains("Instruct")].copy()
+    if len(base_df) > 0:
+        fig_b, axes_b = plt.subplots(1, 3, figsize=(18, 6))
+        fig_b.suptitle("Probe Accuracy by Layer — Base Models Only (EMA Linear)", fontsize=16, fontweight='bold')
+
+        for ax, task in zip(axes_b, tasks):
+            ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
+            ax.set_xlabel("Relative Layer Depth"); ax.set_ylabel("Balanced Accuracy")
+            ax.grid(True, alpha=0.3)
+            chance = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
+            ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
+
+            tdf = base_df[base_df["task"] == task]
+            for model_short in sorted(tdf["short"].unique()):
+                mdf = tdf[tdf["short"] == model_short].sort_values("layer_frac")
+                sk = get_size_key(model_short)
+                ax.plot(mdf["layer_frac"], mdf["text_balanced_acc"],
+                        marker="o", markersize=5, linewidth=2,
+                        color=SIZE_COLORS.get(sk, "#999"),
+                        label=model_short)
+
+            ax.legend(fontsize=9, loc="best", facecolor='#1a1a2e', edgecolor='#444')
+
+        plt.tight_layout()
+        fig_b.savefig(FIGS / "layer_by_layer_base_only.png", dpi=150, bbox_inches="tight")
+        fig_b.savefig(FIGS / "layer_by_layer_base_only.pdf", bbox_inches="tight")
+        print(f"Saved {FIGS / 'layer_by_layer_base_only.png'}")
+
+    # ── Layer-by-layer: chat template models only ────────────────────────
+    chat_df = ema_df[ema_df["source"].str.contains("chat", case=False)].copy()
+    if len(chat_df) > 0:
+        fig_c, axes_c = plt.subplots(1, 3, figsize=(18, 6))
+        fig_c.suptitle("Probe Accuracy by Layer — Chat Template (EMA Linear)", fontsize=16, fontweight='bold')
+
+        for ax, task in zip(axes_c, tasks):
+            ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
+            ax.set_xlabel("Relative Layer Depth"); ax.set_ylabel("Balanced Accuracy")
+            ax.grid(True, alpha=0.3)
+            chance = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
+            ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
+
+            tdf = chat_df[chat_df["task"] == task]
+            for model_short in sorted(tdf["short"].unique()):
+                mdf = tdf[tdf["short"] == model_short].sort_values("layer_frac")
+                sk = get_size_key(model_short)
+                ax.plot(mdf["layer_frac"], mdf["text_balanced_acc"],
+                        marker="o", markersize=5, linewidth=2,
+                        color=SIZE_COLORS.get(sk, "#999"),
+                        label=model_short)
+
+            ax.legend(fontsize=9, loc="best", facecolor='#1a1a2e', edgecolor='#444')
+
+        plt.tight_layout()
+        fig_c.savefig(FIGS / "layer_by_layer_chat.png", dpi=150, bbox_inches="tight")
+        fig_c.savefig(FIGS / "layer_by_layer_chat.pdf", bbox_inches="tight")
+        print(f"Saved {FIGS / 'layer_by_layer_chat.png'}")

@@ -463,7 +463,7 @@ def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers,
     keys = []
     for l in elvs:
         for t in TASKS:
-            keys += [("ema",l,t), ("mm",l,t)]
+            keys += [("ema",l,t), ("ema_pool",l,t), ("mm",l,t)]
             for lam in ridge_sols.get((l,t), {}):
                 keys.append((f"ridge_{lam}",l,t))
     for t in TASKS:
@@ -485,54 +485,74 @@ def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers,
         except torch.cuda.OutOfMemoryError:
             capture.clear(); torch.cuda.empty_cache(); gc.collect(); continue
 
-        B = ids.shape[0]
-        # Compute per-text mean activations for each eval layer (vectorized)
-        # Mean-pool over non-pad tokens per text
+        B, S = ids.shape
+        batch_labels = {t: labs[t].to(dev) for t in TASKS}
         lengths = amask.sum(1)  # (B,)
-        valid_mask = lengths > 0
 
-        per_text_acts = {}  # layer -> (B, D) mean-pooled
+        # ── Per-token predictions, mean-logit aggregation per text ────
+        bi, ti, txid = all_real_positions(amask)
+        if bi.shape[0] == 0:
+            capture.clear(); continue
+
+        # Also compute mean-pooled activations for legacy comparison
+        per_text_acts = {}
+        per_tok_acts = {}
         for l in elvs:
             hs = capture.captured[l]  # (B, S, D)
-            # Masked mean: zero out padding, sum, divide by length
-            masked = hs * amask.unsqueeze(-1)  # (B, S, D)
-            summed = masked.sum(1).float()  # (B, D)
-            per_text_acts[l] = summed / lengths.unsqueeze(1).clamp(min=1).float()
+            per_tok_acts[l] = hs[bi, ti].float()
+            masked = hs * amask.unsqueeze(-1)
+            per_text_acts[l] = (masked.sum(1).float() / lengths.unsqueeze(1).clamp(min=1).float())
 
-        # Multi-layer concat of per-text means
-        cat_acts = torch.cat([per_text_acts[l] for l in multi_layers], dim=1)  # (B, D*K)
+        text_counts = torch.zeros(B, 1, device=dev)
+        text_counts.scatter_add_(0, txid.unsqueeze(1), torch.ones(txid.shape[0], 1, device=dev))
 
-        # Batch labels
-        batch_labels = {t: labs[t].to(dev) for t in TASKS}
-
-        # Run all probes on full batch — no Python loops over items
         for l in elvs:
-            a = per_text_acts[l]  # (B, D)
+            a_tok = per_tok_acts[l]   # (N_tokens, D)
+            a_pool = per_text_acts[l]  # (B, D)
             for t in TASKS:
-                key_ema = ("ema", l, t)
-                preds_ema = ema[(l,t)].predict(a).argmax(-1)  # (B,)
-                acc[key_ema]["tp"].extend(preds_ema.cpu().tolist())
-                acc[key_ema]["tl"].extend(batch_labels[t].cpu().tolist())
+                # ── EMA: per-token mean-logit aggregation ──
+                logits_tok = ema[(l,t)].predict(a_tok)
+                text_logits = torch.zeros(B, logits_tok.shape[1], device=dev)
+                text_logits.scatter_add_(0, txid.unsqueeze(1).expand_as(logits_tok), logits_tok)
+                text_logits = text_logits / text_counts.clamp(min=1)
+                preds_ema = text_logits.argmax(-1)
+                acc[("ema",l,t)]["tp"].extend(preds_ema.cpu().tolist())
+                acc[("ema",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
                 if t == "gender":
-                    probs = torch.softmax(ema[(l,t)].predict(a), -1).cpu().numpy()
-                    acc[key_ema]["pr"].extend(probs.tolist())
+                    probs = torch.softmax(text_logits, -1).cpu().numpy()
+                    acc[("ema",l,t)]["pr"].extend(probs.tolist())
 
-                key_mm = ("mm", l, t)
-                preds_mm = mm[(l,t)].predict(a).argmax(-1)
-                acc[key_mm]["tp"].extend(preds_mm.cpu().tolist())
-                acc[key_mm]["tl"].extend(batch_labels[t].cpu().tolist())
+                # ── EMA: mean-pooled activations (legacy) ──
+                preds_pool = ema[(l,t)].predict(a_pool).argmax(-1)
+                acc[("ema_pool",l,t)]["tp"].extend(preds_pool.cpu().tolist())
+                acc[("ema_pool",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
 
+                # ── Mass-mean: per-token ──
+                logits_mm = mm[(l,t)].predict(a_tok)
+                text_logits_mm = torch.zeros(B, logits_mm.shape[1], device=dev)
+                text_logits_mm.scatter_add_(0, txid.unsqueeze(1).expand_as(logits_mm), logits_mm)
+                text_logits_mm = text_logits_mm / text_counts.clamp(min=1)
+                acc[("mm",l,t)]["tp"].extend(text_logits_mm.argmax(-1).cpu().tolist())
+                acc[("mm",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
+
+                # ── Ridge: per-token ──
                 for lam, (Wz, bi2, mn, sd) in ridge_sols.get((l,t), {}).items():
-                    lo = ((a - mn) / sd) @ Wz + bi2
-                    preds_r = lo.argmax(-1)
-                    acc[(f"ridge_{lam}",l,t)]["tp"].extend(preds_r.cpu().tolist())
+                    lo = ((a_tok - mn) / sd) @ Wz + bi2
+                    text_lo = torch.zeros(B, lo.shape[1], device=dev)
+                    text_lo.scatter_add_(0, txid.unsqueeze(1).expand_as(lo), lo)
+                    text_lo = text_lo / text_counts.clamp(min=1)
+                    acc[(f"ridge_{lam}",l,t)]["tp"].extend(text_lo.argmax(-1).cpu().tolist())
                     acc[(f"ridge_{lam}",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
 
+        # ── Multi-layer: per-token ──
+        cat_acts = torch.cat([per_tok_acts[l] for l in multi_layers], dim=1)
         for t in TASKS:
             for lam, (Wz, bi2, mn, sd) in multi_sols.get(t, {}).items():
                 lo = ((cat_acts - mn) / sd) @ Wz + bi2
-                preds_m = lo.argmax(-1)
-                acc[(f"multi_{lam}","all",t)]["tp"].extend(preds_m.cpu().tolist())
+                text_lo = torch.zeros(B, lo.shape[1], device=dev)
+                text_lo.scatter_add_(0, txid.unsqueeze(1).expand_as(lo), lo)
+                text_lo = text_lo / text_counts.clamp(min=1)
+                acc[(f"multi_{lam}","all",t)]["tp"].extend(text_lo.argmax(-1).cpu().tolist())
                 acc[(f"multi_{lam}","all",t)]["tl"].extend(batch_labels[t].cpu().tolist())
 
         capture.clear()
