@@ -3,8 +3,10 @@ data/raw/
 data/processed/
 *.parquet
 
-# Model weights and probe checkpoints
-probes/
+# Model weights and probe checkpoints (keep ema, ignore large ridge/mm)
+probes/**/*_ridge.pt
+probes/**/*_mm.pt
+probes/**/*_multi*.pt
 
 # HuggingFace cache
 hf_cache/
