@@ -1,0 +1,36 @@
+# Data (too large for git)
+data/raw/
+data/processed/
+*.parquet
+
+# Model weights and probe checkpoints
+probes/
+
+# HuggingFace cache
+hf_cache/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Logs (ephemeral)
+results/logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+*.env
