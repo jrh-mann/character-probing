@@ -18,8 +18,8 @@ __pycache__/
 dist/
 build/
 
-# Logs (ephemeral)
-results/logs/
+# Logs (keep run logs, ignore temp files)
+results/logs/*.tmp
 
 # OS
 .DS_Store

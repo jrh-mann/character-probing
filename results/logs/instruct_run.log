@@ -1,0 +1,173 @@
+Base scaling finished at Wed Mar 18 02:01:08 UTC 2026, launching instruct runs...
+========================================================================
+==> Starting: Qwen/Qwen2.5-0.5B-Instruct (raw, 50000 train texts)
+========================================================================
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading Qwen/Qwen2.5-0.5B-Instruct fp16 ...
+Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights:   0%|          | 1/290 [00:00<04:22,  1.10it/s]Loading weights:  28%|██▊       | 81/290 [00:01<00:01, 106.05it/s]Loading weights:  41%|████      | 119/290 [00:01<00:01, 111.34it/s]Loading weights:  50%|█████     | 145/290 [00:01<00:01, 113.75it/s]Loading weights:  57%|█████▋    | 166/290 [00:01<00:01, 98.14it/s] Loading weights:  63%|██████▎   | 182/290 [00:02<00:01, 97.19it/s]Loading weights:  68%|██████▊   | 196/290 [00:02<00:00, 102.04it/s]Loading weights:  72%|███████▏  | 210/290 [00:02<00:00, 101.17it/s]Loading weights:  78%|███████▊  | 227/290 [00:02<00:00, 114.10it/s]Loading weights:  83%|████████▎ | 241/290 [00:02<00:00, 114.14it/s]Loading weights:  88%|████████▊ | 254/290 [00:02<00:00, 117.27it/s]Loading weights:  92%|█████████▏| 268/290 [00:02<00:00, 117.94it/s]Loading weights: 100%|██████████| 290/290 [00:02<00:00, 102.99it/s]
+  Batch size: 128 (model 0.5B params)
+  hdim=896, layers=24, bs=128, eval_layers=[0, 4, 8, 12, 16, 20, 24]
+  train=50000, test=10000
+
+============================================================
+TRAINING — 50000 texts
+============================================================
+  Multi-layer concat: [0, 4, 8, 12, 16, 20] -> dim=5376
+Train:   0%|          | 0/391 [00:00<?, ?it/s]Train:   0%|          | 0/391 [00:05<?, ?it/s]
+Traceback (most recent call last):
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 597, in <module>
+    main()
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 532, in main
+    ema, mm, ridges, reservoir, multi_layers, ldf = train(model, tl, nl, hdim, args.tokens_per_text, elvs)
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 354, in train
+    log = _process_batch(capture, elvs, multi_layers, bi, ti, tlabs, ema, mm, ridges, reservoir, bn, dev)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 308, in _process_batch
+    if p.total_samples > 0:
+       ^^^^^^^^^^^^^^^
+AttributeError: 'EMAProbe' object has no attribute 'total_samples'
+==> FAILED: Qwen2.5-0.5B-Instruct  exit=1  time=00:01:02
+========================================================================
+==> Starting: Qwen/Qwen2.5-0.5B-Instruct (chat template)
+========================================================================
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading Qwen/Qwen2.5-0.5B-Instruct fp16 ...
+Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights:  12%|█▏        | 35/290 [00:00<00:00, 349.39it/s]Loading weights:  37%|███▋      | 107/290 [00:00<00:00, 561.30it/s]Loading weights:  56%|█████▌    | 163/290 [00:00<00:00, 552.50it/s]Loading weights:  76%|███████▌  | 219/290 [00:00<00:00, 527.94it/s]Loading weights:  94%|█████████▍| 272/290 [00:00<00:00, 414.13it/s]Loading weights: 100%|██████████| 290/290 [00:00<00:00, 472.90it/s]
+  Batch size: 128 (model 0.5B params)
+  hdim=896, layers=24, bs=128, eval_layers=[0, 4, 8, 12, 16, 20, 24]
+  Using chat template for tokenization
+  train=50000, test=10000
+
+============================================================
+TRAINING — 50000 texts
+============================================================
+  Multi-layer concat: [0, 4, 8, 12, 16, 20] -> dim=5376
+Train:   0%|          | 0/391 [00:00<?, ?it/s]Train:   0%|          | 0/391 [00:04<?, ?it/s]
+Traceback (most recent call last):
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 597, in <module>
+    main()
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 532, in main
+    ema, mm, ridges, reservoir, multi_layers, ldf = train(model, tl, nl, hdim, args.tokens_per_text, elvs)
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 354, in train
+    log = _process_batch(capture, elvs, multi_layers, bi, ti, tlabs, ema, mm, ridges, reservoir, bn, dev)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 308, in _process_batch
+    if p.total_samples > 0:
+       ^^^^^^^^^^^^^^^
+AttributeError: 'EMAProbe' object has no attribute 'total_samples'
+scripts/run_instruct.sh: line 25: 362299 Killed                  python3 "$SCRIPT" --model_name "$model" --chat_template --max_train_texts $MAX_TRAIN --max_test_texts $MAX_TEST 2>&1
+     362300 Done                    | tee "$chat_log"
+==> FAILED: Qwen2.5-0.5B-Instruct_chat  exit=137  time=00:00:21
+
+========================================================================
+==> Starting: Qwen/Qwen2.5-1.5B-Instruct (raw, 50000 train texts)
+========================================================================
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading Qwen/Qwen2.5-1.5B-Instruct fp16 ...
+Loading weights:   0%|          | 0/338 [00:00<?, ?it/s]Loading weights:   0%|          | 1/338 [00:01<09:37,  1.71s/it]Loading weights:  22%|██▏       | 75/338 [00:01<00:05, 52.24it/s]Loading weights:  28%|██▊       | 94/338 [00:02<00:04, 52.82it/s]Loading weights:  32%|███▏      | 107/338 [00:02<00:04, 52.80it/s]Loading weights:  35%|███▍      | 117/338 [00:02<00:04, 46.48it/s]Loading weights:  37%|███▋      | 125/338 [00:03<00:04, 46.91it/s]Loading weights:  40%|███▉      | 135/338 [00:03<00:04, 49.77it/s]Loading weights:  42%|████▏     | 142/338 [00:03<00:03, 50.68it/s]Loading weights:  44%|████▍     | 149/338 [00:03<00:04, 42.54it/s]Loading weights:  47%|████▋     | 160/338 [00:03<00:03, 49.64it/s]Loading weights:  51%|█████     | 171/338 [00:03<00:03, 50.99it/s]Loading weights:  54%|█████▎    | 181/338 [00:04<00:02, 57.27it/s]Loading weights:  56%|█████▌    | 188/338 [00:04<00:03, 49.59it/s]Loading weights:  58%|█████▊    | 195/338 [00:04<00:03, 40.98it/s]Loading weights:  59%|█████▉    | 200/338 [00:04<00:03, 41.24it/s]Loading weights:  61%|██████    | 207/338 [00:04<00:02, 46.31it/s]Loading weights:  63%|██████▎   | 213/338 [00:04<00:03, 37.89it/s]Loading weights:  65%|██████▍   | 219/338 [00:05<00:02, 41.29it/s]Loading weights:  66%|██████▋   | 224/338 [00:05<00:02, 40.56it/s]Loading weights:  69%|██████▊   | 232/338 [00:05<00:02, 45.85it/s]Loading weights:  72%|███████▏  | 243/338 [00:05<00:01, 47.95it/s]Loading weights:  75%|███████▌  | 255/338 [00:05<00:01, 48.07it/s]Loading weights:  78%|███████▊  | 265/338 [00:05<00:01, 55.22it/s]Loading weights:  80%|████████  | 271/338 [00:06<00:01, 35.14it/s]Loading weights:  83%|████████▎ | 279/338 [00:06<00:01, 38.51it/s]Loading weights:  84%|████████▍ | 284/338 [00:06<00:01, 36.81it/s]Loading weights:  86%|████████▌ | 291/338 [00:06<00:01, 35.91it/s]Loading weights:  87%|████████▋ | 295/338 [00:06<00:01, 35.84it/s]Loading weights:  90%|████████▉ | 304/338 [00:07<00:00, 45.86it/s]Loading weights:  93%|█████████▎| 315/338 [00:07<00:00, 45.96it/s]Loading weights:  97%|█████████▋| 327/338 [00:07<00:00, 48.15it/s]Loading weights: 100%|██████████| 338/338 [00:07<00:00, 44.73it/s]
+  Batch size: 64 (model 1.5B params)
+  hdim=1536, layers=28, bs=64, eval_layers=[0, 4, 8, 12, 16, 20, 24, 28]
+  train=50000, test=10000
+
+============================================================
+TRAINING — 50000 texts
+============================================================
+  Multi-layer concat: [0, 4, 8, 12, 16, 20] -> dim=9216
+Train:   0%|          | 0/782 [00:00<?, ?it/s]Train:   0%|          | 0/782 [00:04<?, ?it/s]
+Traceback (most recent call last):
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 597, in <module>
+    main()
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 532, in main
+    ema, mm, ridges, reservoir, multi_layers, ldf = train(model, tl, nl, hdim, args.tokens_per_text, elvs)
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 354, in train
+    log = _process_batch(capture, elvs, multi_layers, bi, ti, tlabs, ema, mm, ridges, reservoir, bn, dev)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 308, in _process_batch
+    if p.total_samples > 0:
+       ^^^^^^^^^^^^^^^
+AttributeError: 'EMAProbe' object has no attribute 'total_samples'
+==> FAILED: Qwen2.5-1.5B-Instruct  exit=1  time=00:01:06
+========================================================================
+==> Starting: Qwen/Qwen2.5-1.5B-Instruct (chat template)
+========================================================================
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading Qwen/Qwen2.5-1.5B-Instruct fp16 ...
+Loading weights:   0%|          | 0/338 [00:00<?, ?it/s]Loading weights:   0%|          | 1/338 [00:00<01:10,  4.79it/s]Loading weights:  15%|█▌        | 52/338 [00:00<00:01, 208.83it/s]Loading weights:  29%|██▉       | 99/338 [00:00<00:00, 299.54it/s]Loading weights:  40%|████      | 136/338 [00:00<00:00, 309.83it/s]Loading weights:  51%|█████     | 172/338 [00:00<00:00, 316.30it/s]Loading weights:  61%|██████    | 207/338 [00:00<00:00, 273.03it/s]Loading weights:  72%|███████▏  | 244/338 [00:00<00:00, 296.10it/s]Loading weights:  82%|████████▏ | 276/338 [00:01<00:00, 299.94it/s]Loading weights:  93%|█████████▎| 315/338 [00:01<00:00, 322.20it/s]Loading weights: 100%|██████████| 338/338 [00:01<00:00, 282.51it/s]
+  Batch size: 64 (model 1.5B params)
+  hdim=1536, layers=28, bs=64, eval_layers=[0, 4, 8, 12, 16, 20, 24, 28]
+  Using chat template for tokenization
+  train=50000, test=10000
+
+============================================================
+TRAINING — 50000 texts
+============================================================
+  Multi-layer concat: [0, 4, 8, 12, 16, 20] -> dim=9216
+Train:   0%|          | 0/782 [00:00<?, ?it/s]Train:   0%|          | 0/782 [00:04<?, ?it/s]
+Traceback (most recent call last):
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 597, in <module>
+    main()
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 532, in main
+    ema, mm, ridges, reservoir, multi_layers, ldf = train(model, tl, nl, hdim, args.tokens_per_text, elvs)
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 354, in train
+    log = _process_batch(capture, elvs, multi_layers, bi, ti, tlabs, ema, mm, ridges, reservoir, bn, dev)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 308, in _process_batch
+    if p.total_samples > 0:
+       ^^^^^^^^^^^^^^^
+AttributeError: 'EMAProbe' object has no attribute 'total_samples'
+==> FAILED: Qwen2.5-1.5B-Instruct_chat  exit=1  time=00:00:59
+
+========================================================================
+==> Starting: Qwen/Qwen2.5-3B-Instruct (raw, 50000 train texts)
+========================================================================
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading Qwen/Qwen2.5-3B-Instruct fp16 ...
+Loading weights:   0%|          | 0/434 [00:00<?, ?it/s]Loading weights:   0%|          | 1/434 [00:02<19:37,  2.72s/it]Loading weights:  17%|█▋        | 73/434 [00:02<00:10, 34.38it/s]Loading weights:  22%|██▏       | 94/434 [00:03<00:10, 33.24it/s]Loading weights:  25%|██▍       | 107/434 [00:04<00:10, 32.43it/s]Loading weights:  27%|██▋       | 116/434 [00:04<00:10, 29.13it/s]Loading weights:  28%|██▊       | 123/434 [00:04<00:09, 31.20it/s]Loading weights:  30%|██▉       | 129/434 [00:04<00:10, 29.29it/s]Loading weights:  31%|███▏      | 136/434 [00:05<00:09, 32.37it/s]Loading weights:  34%|███▍      | 147/434 [00:05<00:08, 34.21it/s]Loading weights:  37%|███▋      | 159/434 [00:05<00:07, 35.46it/s]Loading weights:  38%|███▊      | 164/434 [00:05<00:08, 33.75it/s]Loading weights:  39%|███▉      | 171/434 [00:06<00:08, 32.51it/s]Loading weights:  42%|████▏     | 183/434 [00:06<00:08, 29.55it/s]Loading weights:  45%|████▍     | 195/434 [00:06<00:07, 31.00it/s]Loading weights:  48%|████▊     | 207/434 [00:07<00:06, 33.34it/s]Loading weights:  50%|█████     | 219/434 [00:07<00:06, 34.78it/s]Loading weights:  53%|█████▎    | 229/434 [00:07<00:05, 40.51it/s]Loading weights:  54%|█████▍    | 234/434 [00:08<00:06, 30.63it/s]Loading weights:  56%|█████▌    | 243/434 [00:08<00:06, 31.24it/s]Loading weights:  59%|█████▉    | 255/434 [00:08<00:05, 31.60it/s]Loading weights:  62%|██████▏   | 267/434 [00:09<00:05, 32.56it/s]Loading weights:  64%|██████▍   | 279/434 [00:09<00:04, 34.64it/s]Loading weights:  67%|██████▋   | 291/434 [00:09<00:04, 30.40it/s]Loading weights:  70%|██████▉   | 303/434 [00:10<00:04, 32.27it/s]Loading weights:  73%|███████▎  | 315/434 [00:10<00:03, 32.47it/s]Loading weights:  74%|███████▎  | 319/434 [00:10<00:03, 32.23it/s]Loading weights:  75%|███████▌  | 327/434 [00:10<00:03, 29.49it/s]Loading weights:  78%|███████▊  | 339/434 [00:11<00:02, 32.26it/s]Loading weights:  79%|███████▉  | 343/434 [00:11<00:02, 31.09it/s]Loading weights:  81%|████████  | 351/434 [00:11<00:02, 27.82it/s]Loading weights:  83%|████████▎ | 362/434 [00:11<00:01, 37.02it/s]Loading weights:  85%|████████▍ | 367/434 [00:12<00:02, 29.25it/s]Loading weights:  86%|████████▋ | 375/434 [00:12<00:01, 30.94it/s]Loading weights:  89%|████████▉ | 387/434 [00:12<00:01, 31.99it/s]Loading weights:  92%|█████████▏| 399/434 [00:13<00:00, 35.66it/s]Loading weights:  95%|█████████▍| 411/434 [00:13<00:00, 39.21it/s]Loading weights:  96%|█████████▌| 416/434 [00:13<00:00, 40.37it/s]Loading weights:  97%|█████████▋| 423/434 [00:13<00:00, 38.30it/s]Loading weights: 100%|██████████| 434/434 [00:13<00:00, 31.73it/s]
+  Batch size: 32 (model 3.1B params)
+  hdim=2048, layers=36, bs=32, eval_layers=[0, 4, 8, 12, 16, 20, 24, 28, 32, 36]
+  train=50000, test=10000
+
+============================================================
+TRAINING — 50000 texts
+============================================================
+  Multi-layer concat: [0, 4, 8, 12, 16, 20] -> dim=12288
+Train:   0%|          | 0/1563 [00:00<?, ?it/s]Train:   0%|          | 0/1563 [00:03<?, ?it/s]
+Traceback (most recent call last):
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 597, in <module>
+    main()
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 532, in main
+    ema, mm, ridges, reservoir, multi_layers, ldf = train(model, tl, nl, hdim, args.tokens_per_text, elvs)
+                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 354, in train
+    log = _process_batch(capture, elvs, multi_layers, bi, ti, tlabs, ema, mm, ridges, reservoir, bn, dev)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/characterprobing/scripts/02_run_probes.py", line 308, in _process_batch
+    if p.tot_n > 0:
+       ^^^^^^^^^^^^^
+AttributeError: 'EMAProbe' object has no attribute 'total_samples'
+==> FAILED: Qwen2.5-3B-Instruct  exit=1  time=00:01:11
+========================================================================
+==> Starting: Qwen/Qwen2.5-3B-Instruct (chat template)
+========================================================================
+`torch_dtype` is deprecated! Use `dtype` instead!
+Loading Qwen/Qwen2.5-3B-Instruct fp16 ...
+Loading weights:   0%|          | 0/434 [00:00<?, ?it/s]Loading weights:   0%|          | 1/434 [00:00<04:21,  1.65it/s]Loading weights:   3%|▎         | 15/434 [00:00<00:17, 23.60it/s]Loading weights:   6%|▌         | 25/434 [00:00<00:12, 32.30it/s]Loading weights:   7%|▋         | 30/434 [00:01<00:11, 35.00it/s]Loading weights:   9%|▉         | 39/434 [00:01<00:10, 38.47it/s]Loading weights:  10%|█         | 44/434 [00:01<00:09, 40.63it/s]Loading weights:  11%|█▏        | 49/434 [00:01<00:10, 35.85it/s]Loading weights:  12%|█▏        | 54/434 [00:01<00:09, 38.63it/s]Loading weights:  15%|█▍        | 63/434 [00:01<00:07, 49.31it/s]Loading weights:  16%|█▌        | 69/434 [00:01<00:08, 42.70it/s]Loading weights:  18%|█▊        | 76/434 [00:02<00:07, 48.26it/s]Loading weights:  19%|█▉        | 83/434 [00:02<00:06, 52.86it/s]Loading weights:  21%|██        | 89/434 [00:02<00:07, 44.01it/s]Loading weights:  23%|██▎       | 99/434 [00:02<00:06, 55.46it/s]Loading weights:  26%|██▌       | 111/434 [00:02<00:07, 42.12it/s]Loading weights:  28%|██▊       | 123/434 [00:03<00:06, 47.21it/s]Loading weights:  31%|███       | 135/434 [00:03<00:05, 50.60it/s]Loading weights:  34%|███▍      | 147/434 [00:03<00:05, 53.43it/s]Loading weights:  35%|███▌      | 153/434 [00:03<00:05, 54.19it/s]Loading weights:  37%|███▋      | 159/434 [00:03<00:06, 40.12it/s]Loading weights:  39%|███▉      | 171/434 [00:04<00:05, 45.31it/s]Loading weights:  41%|████      | 179/434 [00:04<00:05, 44.22it/s]Loading weights:  43%|████▎     | 185/434 [00:04<00:05, 46.31it/s]Loading weights:  45%|████▍     | 195/434 [00:04<00:05, 47.14it/s]Loading weights:  46%|████▌     | 200/434 [00:04<00:05, 40.93it/s]Loading weights:  48%|████▊     | 207/434 [00:04<00:05, 45.04it/s]Loading weights:  50%|█████     | 218/434 [00:05<00:04, 50.06it/s]Loading weights:  52%|█████▏    | 224/434 [00:05<00:04, 51.43it/s]Loading weights:  53%|█████▎    | 231/434 [00:05<00:04, 44.93it/s]Loading weights:  56%|█████▌    | 243/434 [00:05<00:03, 50.13it/s]Loading weights:  59%|█████▉    | 255/434 [00:06<00:04, 40.35it/s]Loading weights:  62%|██████▏   | 267/434 [00:06<00:03, 45.15it/s]Loading weights:  64%|██████▍   | 279/434 [00:06<00:03, 50.06it/s]Loading weights:  66%|██████▌   | 285/434 [00:06<00:02, 50.90it/s]Loading weights:  67%|██████▋   | 291/434 [00:06<00:03, 44.96it/s]Loading weights:  68%|██████▊   | 297/434 [00:06<00:02, 47.70it/s]Loading weights:  70%|██████▉   | 303/434 [00:06<00:03, 41.69it/s]Loading weights:  72%|███████▏  | 311/434 [00:07<00:02, 49.26it/s]Loading weights:  73%|███████▎  | 317/434 [00:07<00:03, 35.71it/s]Loading weights:  75%|███████▌  | 327/434 [00:07<00:03, 34.84it/s]Loading weights:  78%|███████▊  | 339/434 [00:07<00:02, 47.06it/s]Loading weights:  80%|████████  | 348/434 [00:07<00:01, 47.68it/s]Loading weights:  82%|████████▏ | 354/434 [00:08<00:01, 41.27it/s]Loading weights:  83%|████████▎ | 359/434 [00:08<00:02, 37.12it/s]Loading weights:  84%|████████▍ | 364/434 [00:08<00:01, 38.97it/s]Loading weights:  85%|████████▌ | 369/434 [00:08<00:01, 34.48it/s]Loading weights:  86%|████████▋ | 375/434 [00:09<00:02, 24.96it/s]Loading weights:  89%|████████▉ | 387/434 [00:09<00:01, 38.86it/s]Loading weights:  92%|█████████▏| 399/434 [00:09<00:00, 44.70it/s]Loading weights:  93%|█████████▎| 405/434 [00:09<00:00, 35.74it/s]Loading weights:  94%|█████████▍| 410/434 [00:09<00:00, 37.88it/s]Loading weights:  96%|█████████▌| 415/434 [00:10<00:00, 29.16it/s]Loading weights:  97%|█████████▋| 423/434 [00:10<00:00, 28.53it/s]Loading weights:  98%|█████████▊| 427/434 [00:10<00:00, 26.29it/s]Loading weights: 100%|██████████| 434/434 [00:10<00:00, 40.96it/s]
+  Batch size: 32 (model 3.1B params)
+  hdim=2048, layers=36, bs=32, eval_layers=[0, 4, 8, 12, 16, 20, 24, 28, 32, 36]
+  Using chat template for tokenization
+  train=50000, test=10000
+
+============================================================
+TRAINING — 50000 texts
+============================================================
+  Multi-layer concat: [0, 4, 8, 12, 16, 20] -> dim=12288
+Train:   0%|          | 0/1563 [00:00<?, ?it/s]Train:   0%|          | 1/1563 [00:14<6:22:59, 14.71s/it]Train:   0%|          | 2/1563 [00:17<3:23:32,  7.82s/it]Train:   0%|          | 3/1563 [00:22<2:42:35,  6.25s/it]Train:   0%|          | 4/1563 [00:25<2:15:22,  5.21s/it]Train:   0%|          | 5/1563 [00:27<1:46:59,  4.12s/it]Train:   0%|          | 6/1563 [00:31<1:39:44,  3.84s/it]Train:   0%|          | 7/1563 [00:33<1:27:15,  3.36s/it]Train:   1%|          | 8/1563 [00:36<1:25:08,  3.29s/it]Train:   1%|          | 9/1563 [00:39<1:23:41,  3.23s/it]Train:   1%|          | 10/1563 [00:42<1:21:46,  3.16s/it]Train:   1%|          | 11/1563 [00:45<1:16:30,  2.96s/it]Train:   1%|          | 12/1563 [00:48<1:15:15,  2.91s/it]Train:   1%|          | 13/1563 [00:51<1:17:28,  3.00s/it]Train:   1%|          | 14/1563 [00:54<1:20:41,  3.13s/it]Train:   1%|          | 15/1563 [00:58<1:27:33,  3.39s/it]Train:   1%|          | 16/1563 [01:03<1:36:01,  3.72s/it]Train:   1%|          | 17/1563 [01:05<1:24:50,  3.29s/it]Train:   1%|          | 18/1563 [01:07<1:14:26,  2.89s/it]Train:   1%|          | 19/1563 [01:10<1:12:16,  2.81s/it]Train:   1%|▏         | 20/1563 [01:12<1:10:57,  2.76s/it]Train:   1%|▏         | 21/1563 [01:15<1:08:32,  2.67s/it]Train:   1%|▏         | 22/1563 [01:17<1:08:01,  2.65s/it]Train:   1%|▏         | 23/1563 [01:20<1:08:21,  2.66s/it]Train:   2%|▏         | 24/1563 [01:22<1:04:46,  2.53s/it]Train:   2%|▏         | 25/1563 [01:25<1:06:01,  2.58s/it]Train:   2%|▏         | 26/1563 [01:28<1:06:57,  2.61s/it]Train:   2%|▏         | 27/1563 [01:30<1:05:29,  2.56s/it]Train:   2%|▏         | 28/1563 [01:32<1:02:13,  2.43s/it]Train:   2%|▏         | 29/1563 [01:34<58:02,  2.27s/it]  Train:   2%|▏         | 30/1563 [01:36<58:05,  2.27s/it]Train:   2%|▏         | 31/1563 [01:39<58:46,  2.30s/it]Train:   2%|▏         | 32/1563 [01:41<1:02:19,  2.44s/it]Train:   2%|▏         | 33/1563 [01:44<1:00:55,  2.39s/it]Train:   2%|▏         | 34/1563 [01:46<1:01:29,  2.41s/it]Train:   2%|▏         | 35/1563 [01:51<1:17:34,  3.05s/it]Train:   2%|▏         | 36/1563 [01:55<1:27:21,  3.43s/it]Train:   2%|▏         | 37/1563 [01:59<1:29:05,  3.50s/it]Train:   2%|▏         | 38/1563 [02:03<1:33:43,  3.69s/it]Train:   2%|▏         | 39/1563 [02:08<1:46:21,  4.19s/it]Train:   3%|▎         | 40/1563 [02:13<1:50:07,  4.34s/it]Train:   3%|▎         | 41/1563 [02:18<1:54:48,  4.53s/it]Train:   3%|▎         | 42/1563 [02:24<2:03:17,  4.86s/it]Train:   3%|▎         | 43/1563 [02:28<2:01:11,  4.78s/it]Train:   3%|▎         | 44/1563 [02:32<1:56:11,  4.59s/it]Train:   3%|▎         | 45/1563 [02:36<1:51:46,  4.42s/it]Train:   3%|▎         | 46/1563 [02:42<2:00:53,  4.78s/it]Train:   3%|▎         | 47/1563 [02:47<1:59:43,  4.74s/it]Train:   3%|▎         | 48/1563 [02:52<2:08:46,  5.10s/it]Train:   3%|▎         | 49/1563 [02:58<2:09:36,  5.14s/it]Train:   3%|▎         | 50/1563 [03:03<2:09:46,  5.15s/it]Train:   3%|▎         | 51/1563 [03:08<2:10:20,  5.17s/it]Train:   3%|▎         | 52/1563 [03:14<2:13:41,  5.31s/it]Train:   3%|▎         | 53/1563 [03:18<2:07:12,  5.05s/it]Train:   3%|▎         | 54/1563 [03:22<1:59:02,  4.73s/it]Train:   4%|▎         | 55/1563 [03:27<2:01:56,  4.85s/it]Train:   4%|▎         | 56/1563 [03:32<2:04:21,  4.95s/it]Train:   4%|▎         | 57/1563 [03:36<1:54:20,  4.56s/it]Train:   4%|▎         | 58/1563 [03:42<2:01:53,  4.86s/it]Train:   4%|▍         | 59/1563 [03:45<1:50:30,  4.41s/it]Train:   4%|▍         | 60/1563 [03:50<1:55:16,  4.60s/it]
