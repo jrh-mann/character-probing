@@ -379,7 +379,7 @@ def eval_layers_list(nl, stride=4):
 def auto_bs(model):
     """Auto batch size based on model size and available GPU VRAM."""
     n = sum(p.numel() for p in model.parameters()) / 1e9
-    vram_gb = torch.cuda.get_device_properties(0).total_mem / 1e9 if torch.cuda.is_available() else 24
+    vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 24
 
     if vram_gb >= 75:  # A100-80GB
         if n < 1:    bs = 256
