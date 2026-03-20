@@ -103,24 +103,17 @@ else
     echo "  Done ✓"
 fi
 
-# ── 4. Clean old results for fresh run ───────────────────────────────
+# ── 4. Check existing progress ───────────────────────────────────────
 echo ""
-echo "━━━ [4/6] Preparing fresh run ━━━"
-# Remove old results, probes, and figures so nothing is skipped
-for dir in results/logs results figures; do
-    target="$REPO_DIR/$dir"
-    if [ -d "$target" ] && [ -n "$(ls -A "$target" 2>/dev/null)" ]; then
-        echo "  Cleaning $dir/..."
-        rm -rf "${target:?}"/*
-    fi
-done
-# Clean old probe directories
-if [ -d "$REPO_DIR/probes" ]; then
-    echo "  Cleaning probes/..."
-    rm -rf "$REPO_DIR/probes"/*
+echo "━━━ [4/6] Checking existing progress ━━━"
+completed=$(ls "$REPO_DIR/results/"*_per_layer_results.csv 2>/dev/null | wc -l)
+if [ "$completed" -gt 0 ]; then
+    echo "  Found $completed completed models — will resume from where we left off."
+    echo "  (To start fresh, run: rm -rf results/* probes/* figures/*)"
+else
+    echo "  No previous results found — starting fresh."
 fi
 mkdir -p "$REPO_DIR/results/logs" "$REPO_DIR/figures"
-echo "  Clean slate ✓"
 
 # ── 5. Start monitoring + run experiments ────────────────────────────
 echo ""
