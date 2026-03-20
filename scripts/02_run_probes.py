@@ -404,10 +404,10 @@ def auto_bs(model):
     if vram_gb >= 75:  # A100-80GB
         if n < 1:    bs = 256
         elif n < 2:  bs = 256
-        elif n < 5:  bs = 128
-        elif n < 10: bs = 64
-        elif n < 15: bs = 32
-        else:        bs = 16
+        elif n < 5:  bs = 256
+        elif n < 10: bs = 128
+        elif n < 15: bs = 64
+        else:        bs = 32
     elif vram_gb >= 38:  # A40/A6000/A100-40GB
         if n < 1:    bs = 128
         elif n < 2:  bs = 128
