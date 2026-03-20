@@ -261,6 +261,39 @@ class MLPProbe(torch.nn.Module):
         xn = (x - self.rmean) / (self.rvar.sqrt() + 1e-8)
         return self.net(xn)
 
+# ── Attention Probe (GPU, Dower et al. 2024) ──────────────────────────────
+
+class AttentionProbe(torch.nn.Module):
+    """Attention probe: learns which token positions to attend to.
+    Operates on full (B, S, D) sequences with masking, unlike other probes
+    which work on flattened (N_tokens, D) tensors."""
+    def __init__(self, D, C, dev="cuda"):
+        super().__init__()
+        sc = 1.0 / D**0.5
+        self.w_q = torch.nn.Parameter(torch.randn(D, device=dev) * sc)
+        self.b_q = torch.nn.Parameter(torch.zeros(1, device=dev))
+        self.W_v = torch.nn.Parameter(torch.randn(D, C, device=dev) * sc)
+        self.b_v = torch.nn.Parameter(torch.zeros(C, device=dev))
+        self.opt = torch.optim.AdamW(self.parameters(), lr=1e-4, weight_decay=1e-5)
+
+    def forward(self, A, mask):
+        scores = A @ self.w_q + self.b_q
+        scores = scores.masked_fill(~mask, float('-inf'))
+        q = torch.softmax(scores, dim=1)
+        values = A @ self.W_v
+        logits = torch.einsum('bs,bsc->bc', q, values) + self.b_v
+        return logits
+
+    def update(self, A, mask, y):
+        self.opt.zero_grad()
+        logits = self.forward(A, mask)
+        loss = F.cross_entropy(logits, y)
+        loss.backward()
+        self.opt.step()
+        with torch.no_grad():
+            acc = (logits.argmax(-1) == y).float().mean()
+        return loss.detach(), acc
+
 # ── Cross-Layer Gram (GPU, for multi-layer ridge) ────────────────────────
 
 class CrossLayerGram:
@@ -452,14 +485,16 @@ class ActivationCapture:
 # ── Train ────────────────────────────────────────────────────────────────
 
 def _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges, cross_gram,
-                    bn, dev, ema_configs, shuffled_ema=None, mlps=None):
+                    bn, dev, ema_configs, amask, batch_labels,
+                    shuffled_ema=None, mlps=None, attn_probes=None):
     """Process one batch through all probes. Returns list of log rows (long format)."""
-    # Accumulate (loss_tensor, acc_tensor) pairs, convert to Python at the end
     pending = []  # [(config_name, lr, wd, layer, task, loss_tensor, acc_tensor)]
     n_tokens = bi.shape[0]
+    mask = amask.bool()
     layer_acts = {}
     for l in elvs:
-        a = capture.captured[l][bi, ti].float()
+        hs = capture.captured[l]  # (B, S, D) — full sequence
+        a = hs[bi, ti].float()    # (N_tokens, D) — non-pad only
         layer_acts[l] = a
         for t in TASKS:
             for ci, cfg in enumerate(ema_configs):
@@ -469,6 +504,9 @@ def _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges, cross_gram,
                 for h in MLP_HIDDEN_SIZES:
                     loss_m, acc_m = mlps[(l,t,h)].update(a, tlabs[t])
                     pending.append((f"mlp_h{h}", 1e-3, 0, l, t, loss_m, acc_m))
+            if attn_probes is not None:
+                loss_a, acc_a = attn_probes[(l,t)].update(hs.float(), mask, batch_labels[t])
+                pending.append(("attention", 1e-4, 1e-5, l, t, loss_a, acc_a))
             if shuffled_ema is not None:
                 perm = torch.randperm(a.shape[0], device=dev)
                 shuffled_y = tlabs[t][perm]
@@ -512,7 +550,10 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda",
         for t in TASKS:
             for h in MLP_HIDDEN_SIZES:
                 mlps[(l,t,h)] = MLPProbe(hdim, TASK_N_CLASSES[t], hidden=h, dev=dev)
-    print(f"  Probes: {len(ema)} EMA + {len(mlps)} MLP + {len(shuffled_ema)} shuffled")
+    # Attention probes (learn which positions to attend to)
+    attn_probes = {(l,t): AttentionProbe(hdim, TASK_N_CLASSES[t], dev=dev)
+                   for l in elvs for t in TASKS}
+    print(f"  Probes: {len(ema)} EMA + {len(mlps)} MLP + {len(attn_probes)} attn + {len(shuffled_ema)} shuffled")
 
     mm = {(l,t): MassMean(hdim, TASK_N_CLASSES[t], dev) for l in elvs for t in TASKS}
     ridges = {l: Ridge(hdim, dev) for l in elvs}
@@ -557,10 +598,13 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda",
                 if bi.shape[0] == 0:
                     capture.clear(); continue
 
-                tlabs = {t: labs[t].to(dev)[txid] for t in TASKS}
+                batch_labels = {t: labs[t].to(dev) for t in TASKS}
+                tlabs = {t: batch_labels[t][txid] for t in TASKS}
                 rows = _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges,
                                       cross_gram, global_bn, dev, ema_configs,
-                                      shuffled_ema=shuffled_ema, mlps=mlps)
+                                      amask=amask, batch_labels=batch_labels,
+                                      shuffled_ema=shuffled_ema, mlps=mlps,
+                                      attn_probes=attn_probes)
                 all_log_rows.extend(rows)
                 capture.clear()
 
@@ -580,12 +624,12 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda",
     if oom_count > 0:
         print(f"  Total OOM skips: {oom_count}/{bn+1} batches ({oom_count/(bn+1)*100:.1f}%)")
     print(f"  Completed {global_bn} batches")
-    return ema, shuffled_ema, mlps, mm, ridges, cross_gram, multi_layers, pd.DataFrame(all_log_rows), ema_configs
+    return ema, shuffled_ema, mlps, attn_probes, mm, ridges, cross_gram, multi_layers, pd.DataFrame(all_log_rows), ema_configs
 
 # ── Evaluate ─────────────────────────────────────────────────────────────
 
 def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl,
-             ema_configs=None, shuffled_ema=None, mlps=None, dev="cuda"):
+             ema_configs=None, shuffled_ema=None, mlps=None, attn_probes=None, dev="cuda"):
     if ema_configs is None:
         ema_configs = EMA_CONFIGS
 
@@ -598,6 +642,8 @@ def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers,
                 for mlp_key in mlps:
                     if mlp_key[0] == l and mlp_key[1] == t:
                         keys.append((f"mlp_h{mlp_key[2]}",l,t))
+            if attn_probes:
+                keys.append(("attention",l,t))
             if shuffled_ema:
                 keys.append(("shuffled",l,t))
             keys += [("mm",l,t)]
@@ -667,6 +713,15 @@ def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers,
                         text_logits_m = text_logits_m / text_counts.clamp(min=1)
                         acc[(f"mlp_h{h}",l,t)]["tp"].extend(text_logits_m.argmax(-1).cpu().tolist())
                         acc[(f"mlp_h{h}",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
+
+                # ── Attention probe: operates on full (B, S, D) ──
+                if attn_probes and (l,t) in attn_probes:
+                    with torch.no_grad():
+                        hs_full = capture.captured[l].float()
+                        attn_logits = attn_probes[(l,t)](hs_full, amask.bool())
+                        attn_preds = attn_logits.argmax(-1)
+                    acc[("attention",l,t)]["tp"].extend(attn_preds.cpu().tolist())
+                    acc[("attention",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
 
                 # ── Shuffled control: per-token ──
                 if shuffled_ema and (l,t) in shuffled_ema:
@@ -792,7 +847,7 @@ def main():
     batch_info = f", max_batches={args.max_train_batches}" if args.max_train_batches > 0 else ""
     print(f"\n{'='*60}\nTRAINING — {len(trn)} texts, {args.epochs} epoch(s){batch_info}\n{'='*60}")
     t0 = time.time()
-    ema, shuffled_ema, mlps, mm, ridges, cross_gram, multi_layers, ldf, ema_configs = train(
+    ema, shuffled_ema, mlps, attn_probes, mm, ridges, cross_gram, multi_layers, ldf, ema_configs = train(
         model, tl, nl, hdim, args.tokens_per_text, elvs,
         epochs=args.epochs, max_batches=args.max_train_batches)
     tt = time.time() - t0; print(f"Training: {tt:.1f}s")
@@ -804,6 +859,8 @@ def main():
     for (l,t,h), p in mlps.items(): torch.save(p.state_dict(), pd_dir / f"L{l}_{t}_mlp_h{h}.pt")
     for (l,t), p in shuffled_ema.items():
         torch.save(p.state_dict(), pd_dir / f"L{l}_{t}_shuffled.pt")
+    for (l,t), p in attn_probes.items():
+        torch.save(p.state_dict(), pd_dir / f"L{l}_{t}_attn.pt")
     for (l,t), p in mm.items(): torch.save({"sums": p.sums.cpu(), "counts": p.counts.cpu()}, pd_dir / f"L{l}_{t}_mm.pt")
     for l, r in ridges.items(): torch.save(r.state_dict(), pd_dir / f"L{l}_ridge.pt")
     # Save cross-layer Gram blocks (enables re-solving multi-layer without rerunning)
@@ -844,7 +901,8 @@ def main():
     print(f"\n{'='*60}\nEVALUATION — {len(tst)} texts\n{'='*60}")
     t0 = time.time()
     rdf = evaluate(model, el, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl,
-                   ema_configs=ema_configs, shuffled_ema=shuffled_ema, mlps=mlps)
+                   ema_configs=ema_configs, shuffled_ema=shuffled_ema, mlps=mlps,
+                   attn_probes=attn_probes)
     et = time.time() - t0; print(f"Evaluation: {et:.1f}s")
 
     rdf.insert(0, "model_name", args.model_name)

@@ -10,7 +10,6 @@ BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
 os.environ.setdefault("HF_HOME", str(BASE_DIR / "hf_cache"))
 
 PROBE_SCRIPT = str(BASE_DIR / "scripts" / "02_run_probes.py")
-ATTN_SCRIPT = str(BASE_DIR / "scripts" / "05_attention_probe.py")
 LOG_DIR = BASE_DIR / "results" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -99,22 +98,10 @@ for model, extra, suffix in RUNS:
         print(f"==> CMD: {' '.join(cmd)}", flush=True)
         print(f"{'='*60}", flush=True)
 
-        ok = run_with_retry(cmd, LOG_DIR / f"{short}.log", f"{short} probes",
+        ok = run_with_retry(cmd, LOG_DIR / f"{short}.log", f"{short}",
                            result_file=result_file,
                            probe_dir=BASE_DIR / "probes" / short)
-        (successes if ok else failures).append(f"{short} probes")
-
-    # ── Attention probes ───────────────────────────────────────────
-    attn_result = results_dir / f"{short}_attn_results.csv"
-    if attn_result.exists():
-        print(f"SKIP {short} attention (results exist)", flush=True)
-    else:
-        attn_cmd = [sys.executable, ATTN_SCRIPT, "--model_name", model,
-                    "--max_train_texts", "100000", "--max_test_texts", "10000"] + extra
-
-        ok = run_with_retry(attn_cmd, LOG_DIR / f"{short}_attn.log", f"{short} attention",
-                           result_file=attn_result)
-        (successes if ok else failures).append(f"{short} attention")
+        (successes if ok else failures).append(short)
 
 # ── Summary ────────────────────────────────────────────────────────
 print(f"\n{'='*60}", flush=True)
