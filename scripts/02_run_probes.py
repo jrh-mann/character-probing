@@ -270,7 +270,7 @@ class AttentionProbe(torch.nn.Module):
         self.b_q = torch.nn.Parameter(torch.zeros(1, device=dev))
         self.W_v = torch.nn.Parameter(torch.randn(D, C, device=dev) * sc)
         self.b_v = torch.nn.Parameter(torch.zeros(C, device=dev))
-        self.opt = torch.optim.AdamW(self.parameters(), lr=1e-4, weight_decay=1e-5)
+        self.opt = torch.optim.AdamW(self.parameters(), lr=5e-4, weight_decay=1e-5)
 
     def forward(self, A, mask):
         scores = A @ self.w_q + self.b_q
