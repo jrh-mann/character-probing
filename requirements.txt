@@ -1,5 +1,6 @@
 # torch is installed separately in setup.sh (needs CUDA-specific wheel)
 transformers>=4.51
+accelerate
 huggingface_hub
 safetensors
 pandas

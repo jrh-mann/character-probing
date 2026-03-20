@@ -186,7 +186,7 @@ def main():
     if tok.pad_token is None: tok.pad_token = tok.eos_token
 
     print(f"Loading {args.model_name} bf16 ...")
-    model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype=torch.bfloat16,
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, dtype=torch.bfloat16,
                                                   device_map="auto", trust_remote_code=True)
     model.eval()
     hdim = model.config.hidden_size
