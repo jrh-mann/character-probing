@@ -170,11 +170,11 @@ class Ridge:
             self.class_counts[t] += oh.sum(0)
 
     def solve(self, lam=1.0, task="age_bin"):
-        """Returns (W_z, bias, mean, std) — weights in z-scored space. Solved on GPU float32."""
+        """Returns (W_z, bias, mean, std) — weights in z-scored space. Solved on GPU float64."""
         n = max(self.n, 1)
-        sx = self.sx.float(); sx2 = self.sx2.float()
-        A = self.A.float(); Bt = self.B[task].float()
-        cc = self.class_counts[task].float()
+        sx = self.sx.double(); sx2 = self.sx2.double()
+        A = self.A.double(); Bt = self.B[task].double()
+        cc = self.class_counts[task].double()
 
         mean = sx / n
         var = (sx2 / n - mean**2).clamp(min=1e-8); std = var.sqrt(); inv = 1.0/std
@@ -186,9 +186,9 @@ class Ridge:
         B_c = Bt - n * mean.unsqueeze(1) @ mean_y.unsqueeze(0)
         B_z = B_c * inv.unsqueeze(1)
 
-        W_z = torch.linalg.solve(A_z / n + lam * torch.eye(self.D, device=self.dev), B_z / n)
+        W_z = torch.linalg.solve(A_z / n + lam * torch.eye(self.D, device=self.dev, dtype=torch.float64), B_z / n)
         bias = mean_y
-        return W_z, bias, mean, std
+        return W_z.float(), bias.float(), mean.float(), std.float()
 
     def state_dict(self):
         d = {"A": self.A.cpu(), "sx": self.sx.cpu(), "sx2": self.sx2.cpu(), "n": self.n}
@@ -226,8 +226,8 @@ class MLPProbe(torch.nn.Module):
             torch.nn.Linear(hidden, C),
         ).to(dev)
         self.opt = torch.optim.Adam(self.net.parameters(), lr=1e-3)
-        self.rmean = torch.zeros(D, device=dev)
-        self.rvar = torch.ones(D, device=dev)
+        self.register_buffer('rmean', torch.zeros(D, device=dev))
+        self.register_buffer('rvar', torch.ones(D, device=dev))
         self.ns = 0
 
     @torch.no_grad()
