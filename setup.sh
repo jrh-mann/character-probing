@@ -41,6 +41,11 @@ else
 fi
 echo "  Installing other dependencies..."
 pip install -q -r "$REPO_DIR/requirements.txt"
+# Ensure system tools are available
+if ! command -v unzip &>/dev/null; then
+    echo "  Installing unzip..."
+    apt-get update -qq && apt-get install -y -qq unzip > /dev/null 2>&1
+fi
 echo "  Done ✓"
 
 # HuggingFace login (needed for gated models like Llama)
