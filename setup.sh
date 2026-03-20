@@ -106,7 +106,7 @@ fi
 # ── 4. Check existing progress ───────────────────────────────────────
 echo ""
 echo "━━━ [4/6] Checking existing progress ━━━"
-completed=$(ls "$REPO_DIR/results/"*_per_layer_results.csv 2>/dev/null | wc -l)
+completed=$(find "$REPO_DIR/results" -maxdepth 1 -name '*_per_layer_results.csv' 2>/dev/null | wc -l)
 if [ "$completed" -gt 0 ]; then
     echo "  Found $completed completed models — will resume from where we left off."
     echo "  (To start fresh, run: rm -rf results/* probes/* figures/*)"
@@ -160,7 +160,7 @@ echo "  Finished: $(date)"
 if ls "$REPO_DIR/results/"*_per_layer_results.csv &>/dev/null; then
     echo ""
     echo "── Quick Results ──"
-    completed=$(ls "$REPO_DIR/results/"*_per_layer_results.csv 2>/dev/null | wc -l)
+    completed=$(find "$REPO_DIR/results" -maxdepth 1 -name '*_per_layer_results.csv' 2>/dev/null | wc -l)
     echo "  $completed models completed"
     echo "  Run 'python3 scripts/plot_live.py' for detailed analysis"
 fi
