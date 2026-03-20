@@ -11,8 +11,9 @@ plt.rcParams.update({
     'grid.color': '#333', 'grid.alpha': 0.5,
 })
 
-RESULTS = Path("/workspace/characterprobing/results")
-FIGS = Path("/root/characterprobing/figures")
+BASE_DIR = Path(__file__).resolve().parent.parent
+RESULTS = BASE_DIR / "results"
+FIGS = BASE_DIR / "figures"
 FIGS.mkdir(parents=True, exist_ok=True)
 
 TASK_COLORS = {"age_bin": "#FF6B6B", "gender": "#4ECDC4", "star_sign": "#FFE66D"}

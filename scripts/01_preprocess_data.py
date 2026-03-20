@@ -17,9 +17,12 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from sklearn.model_selection import train_test_split
 
-# ── paths ────────────────────────────────────────────────────────────────
-RAW_DIR = pathlib.Path("/root/characterprobing/data/raw/blogs")
-OUT_PATH = pathlib.Path("/workspace/characterprobing/data/processed/blog_corpus.parquet")
+# ── paths (relative to repo root) ────────────────────────────────────────
+BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+os.environ.setdefault("HF_HOME", str(BASE_DIR / "hf_cache"))
+
+RAW_DIR = BASE_DIR / "data" / "raw" / "blogs"
+OUT_PATH = BASE_DIR / "data" / "processed" / "blog_corpus.parquet"
 OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # ── age bins ─────────────────────────────────────────────────────────────
@@ -116,7 +119,7 @@ def main():
             if not text:
                 continue
             n_tokens = len(tokenizer.encode(text, add_special_tokens=False))
-            if 50 <= n_tokens <= 1024:
+            if n_tokens >= 50:  # no upper bound — tokenizer truncates at MAX_SEQ_LEN
                 blogger_posts[blogger_id].append((text, n_tokens))
 
         if blogger_id in blogger_posts:

@@ -11,7 +11,7 @@ Strategies:
   4. Mass-Mean Probe — per-layer, zero-parameter nearest-centroid
 """
 
-import argparse, gc, json, time
+import argparse, gc, json, os, sys, time
 from pathlib import Path
 
 import numpy as np
@@ -24,10 +24,31 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+os.environ.setdefault("HF_HOME", str(BASE_DIR / "hf_cache"))
+NUM_WORKERS = min(8, os.cpu_count() or 1)
+
 MAX_SEQ_LEN = 1024
 SEED = 42
 RESERVOIR_SIZE = 50000
 MAX_MULTI_LAYERS = 6  # cap concat layers to limit reservoir/solve memory
+
+# Multiple EMA probe configs — train all simultaneously on the same activations.
+# Cost is negligible (tiny linear ops) vs the LLM forward pass.
+EMA_CONFIGS = [
+    # LR sweep (decay=0.999)
+    {"lr": 0.001, "wd": 1e-4, "decay": 0.999,  "name": "ema_lr1e-3"},
+    {"lr": 0.005, "wd": 1e-4, "decay": 0.999,  "name": "ema_lr5e-3"},
+    {"lr": 0.01,  "wd": 1e-4, "decay": 0.999,  "name": "ema_lr1e-2"},      # original default
+    {"lr": 0.05,  "wd": 1e-4, "decay": 0.999,  "name": "ema_lr5e-2"},
+    # WD variant
+    {"lr": 0.01,  "wd": 1e-3, "decay": 0.999,  "name": "ema_lr1e-2_wd1e-3"},
+    # Decay sweep (lr=0.01)
+    {"lr": 0.01,  "wd": 1e-4, "decay": 0.99,   "name": "ema_d0.99"},
+    {"lr": 0.01,  "wd": 1e-4, "decay": 0.9999, "name": "ema_d0.9999"},
+]
+
+MLP_HIDDEN_SIZES = [16, 32, 64, 128]
 
 AGE_BIN_MAP = {1: 0, 2: 1, 3: 2}
 GENDER_MAP = {"female": 0, "male": 1}
@@ -100,7 +121,9 @@ class EMAProbe:
         xn = (x - self.rmean) / (self.rvar.sqrt() + 1e-8)
         lo = xn @ self.W.T + self.b
         loss = F.cross_entropy(lo, y).item()
-        self.tot_c += (lo.argmax(-1) == y).sum().item(); self.tot_n += y.shape[0]
+        batch_c = (lo.argmax(-1) == y).sum().item()
+        batch_n = y.shape[0]
+        self.tot_c += batch_c; self.tot_n += batch_n
         p = torch.softmax(lo, -1)
         oh = torch.zeros_like(p).scatter_(1, y.unsqueeze(1), 1.0)
         gl = (p - oh) / xn.shape[0]
@@ -109,7 +132,7 @@ class EMAProbe:
         self.W_ema.mul_(self.decay).add_(self.W, alpha=1-self.decay)
         self.b_ema.mul_(self.decay).add_(self.b, alpha=1-self.decay)
         self.step += 1
-        return loss
+        return loss, batch_c / max(batch_n, 1)
 
     @torch.no_grad()
     def predict(self, x):
@@ -119,7 +142,7 @@ class EMAProbe:
 
     def state_dict(self):
         return {k: getattr(self, k).cpu() if isinstance(getattr(self, k), torch.Tensor) else getattr(self, k)
-                for k in ("W","b","W_ema","b_ema","rmean","rvar","ns","step")}
+                for k in ("W","b","W_ema","b_ema","rmean","rvar","ns","step","decay")}
 
 # ── Incremental Ridge (GPU, float32, solve in float64) ───────────────────
 
@@ -194,6 +217,51 @@ class MassMean:
     def predict(self, x):
         ctr = self.sums / self.counts.unsqueeze(1).clamp(min=1)
         return -torch.cdist(x.unsqueeze(0), ctr.unsqueeze(0)).squeeze(0)
+
+# ── MLP Probe (GPU, nonlinear baseline) ───────────────────────────────────
+
+class MLPProbe(torch.nn.Module):
+    """One-hidden-layer MLP probe. Tests whether signal is linearly encoded.
+    If MLP ≈ linear probe accuracy, the information lives in a linear subspace.
+    If MLP >> linear, the linear probe is underfitting."""
+    def __init__(self, D, C, hidden=256, dev="cuda"):
+        super().__init__()
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(D, hidden),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden, C),
+        ).to(dev)
+        self.opt = torch.optim.Adam(self.net.parameters(), lr=1e-3)
+        self.rmean = torch.zeros(D, device=dev)
+        self.rvar = torch.ones(D, device=dev)
+        self.ns = 0
+
+    @torch.no_grad()
+    def _ustats(self, x):
+        B = x.shape[0]
+        bm = x.mean(0)
+        bv = x.var(0, unbiased=False) if B > 1 else torch.zeros(x.shape[1], device=x.device)
+        nn = self.ns + B; d = bm - self.rmean
+        self.rmean += d * (B / nn)
+        self.rvar = (self.rvar * self.ns + bv * B + d**2 * self.ns * B / nn) / nn
+        self.ns = nn
+
+    def update(self, x, y):
+        self._ustats(x)
+        xn = (x - self.rmean) / (self.rvar.sqrt() + 1e-8)
+        self.opt.zero_grad()
+        lo = self.net(xn)
+        loss = F.cross_entropy(lo, y)
+        loss.backward()
+        self.opt.step()
+        with torch.no_grad():
+            batch_acc = (lo.argmax(-1) == y).float().mean().item()
+        return loss.item(), batch_acc
+
+    @torch.no_grad()
+    def predict(self, x):
+        xn = (x - self.rmean) / (self.rvar.sqrt() + 1e-8)
+        return self.net(xn)
 
 # ── Cross-Layer Gram (GPU, for multi-layer ridge) ────────────────────────
 
@@ -309,17 +377,31 @@ def eval_layers_list(nl, stride=4):
     return sorted(ls)
 
 def auto_bs(model):
-    """Fixed batch sizes based on empirical VRAM profiling on A40 (46GB).
-    Conservative enough to never OOM; OOM handler catches rare outlier batches."""
+    """Auto batch size based on model size and available GPU VRAM."""
     n = sum(p.numel() for p in model.parameters()) / 1e9
-    # A40 (46GB) with hooks. Measured: 0.5B@128=29GB, 1.5B@64=19GB, 3B@32=17GB.
-    # Previous sizes were too conservative. Targeting ~35GB peak.
-    if n < 1:    bs = 128
-    elif n < 2:  bs = 128
-    elif n < 5:  bs = 64
-    elif n < 10: bs = 32
-    else:        bs = 16
-    print(f"  Batch size: {bs} (model {n:.1f}B params)")
+    vram_gb = torch.cuda.get_device_properties(0).total_mem / 1e9 if torch.cuda.is_available() else 24
+
+    if vram_gb >= 75:  # A100-80GB
+        if n < 1:    bs = 256
+        elif n < 2:  bs = 256
+        elif n < 5:  bs = 128
+        elif n < 10: bs = 64
+        elif n < 15: bs = 32
+        else:        bs = 16
+    elif vram_gb >= 38:  # A40/A6000/A100-40GB
+        if n < 1:    bs = 128
+        elif n < 2:  bs = 128
+        elif n < 5:  bs = 64
+        elif n < 10: bs = 32
+        else:        bs = 16
+    else:  # 24GB cards (4090, A5000, etc.)
+        if n < 1:    bs = 64
+        elif n < 2:  bs = 64
+        elif n < 5:  bs = 32
+        elif n < 10: bs = 16
+        else:        bs = 8
+
+    print(f"  Batch size: {bs} (model {n:.1f}B params, {vram_gb:.0f}GB VRAM)")
     return bs
 
 def short(s): return s.rstrip("/").split("/")[-1]
@@ -378,28 +460,75 @@ class ActivationCapture:
 
 # ── Train ────────────────────────────────────────────────────────────────
 
-def _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges, cross_gram, bn, dev):
-    """Process one batch of activations through all probe strategies. Returns log dict."""
-    log = {"batch": bn}
+def _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges, cross_gram,
+                    bn, dev, ema_configs, shuffled_ema=None, mlps=None):
+    """Process one batch through all probes. Returns list of log rows (long format)."""
+    log_rows = []
+    n_tokens = bi.shape[0]
     layer_acts = {}
     for l in elvs:
         a = capture.captured[l][bi, ti].float()
         layer_acts[l] = a
         for t in TASKS:
-            loss = ema[(l,t)].update(a, tlabs[t])
-            log[f"loss_L{l}_{t}"] = round(loss, 5)
-            p = ema[(l,t)]
-            if p.tot_n > 0:
-                log[f"acc_L{l}_{t}"] = round(p.tot_c / p.tot_n, 5)
+            # Update all EMA configs on the same activations (real labels)
+            for ci, cfg in enumerate(ema_configs):
+                loss, batch_acc = ema[(l,t,ci)].update(a, tlabs[t])
+                log_rows.append({
+                    "batch": bn, "layer": l, "task": t,
+                    "config": cfg["name"], "lr": cfg["lr"], "wd": cfg["wd"],
+                    "loss": round(loss, 5), "batch_acc": round(batch_acc, 5),
+                    "n_tokens": n_tokens,
+                })
+            # MLP probes (nonlinear, multiple hidden sizes)
+            if mlps is not None:
+                for h in MLP_HIDDEN_SIZES:
+                    loss_m, acc_m = mlps[(l,t,h)].update(a, tlabs[t])
+                    log_rows.append({
+                        "batch": bn, "layer": l, "task": t,
+                        "config": f"mlp_h{h}", "lr": 1e-3, "wd": 0,
+                        "loss": round(loss_m, 5), "batch_acc": round(acc_m, 5),
+                        "n_tokens": n_tokens,
+                    })
+            # Shuffled-label control probes (same activations, permuted labels)
+            if shuffled_ema is not None:
+                perm = torch.randperm(a.shape[0], device=dev)
+                shuffled_y = tlabs[t][perm]
+                loss_s, acc_s = shuffled_ema[(l,t)].update(a, shuffled_y)
+                log_rows.append({
+                    "batch": bn, "layer": l, "task": t,
+                    "config": "shuffled", "lr": 0.01, "wd": 1e-4,
+                    "loss": round(loss_s, 5), "batch_acc": round(acc_s, 5),
+                    "n_tokens": n_tokens,
+                })
             mm[(l,t)].update(a, tlabs[t])
         ridges[l].update(a, tlabs)
-    # Cross-layer Gram update (only for multi_layers subset)
     cross_gram.update(layer_acts)
-    return log
+    return log_rows
 
 
-def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda"):
-    ema = {(l,t): EMAProbe(hdim, TASK_N_CLASSES[t], dev) for l in elvs for t in TASKS}
+def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda",
+          ema_configs=None, max_batches=0):
+    if ema_configs is None:
+        ema_configs = EMA_CONFIGS
+
+    # Create one EMA probe per (layer, task, config)
+    ema = {}
+    for l in elvs:
+        for t in TASKS:
+            for ci, cfg in enumerate(ema_configs):
+                ema[(l,t,ci)] = EMAProbe(hdim, TASK_N_CLASSES[t], dev,
+                                          lr=cfg["lr"], wd=cfg["wd"], decay=cfg["decay"])
+    # Shuffled-label control: one probe per (layer, task) with default hyperparams
+    shuffled_ema = {(l,t): EMAProbe(hdim, TASK_N_CLASSES[t], dev)
+                    for l in elvs for t in TASKS}
+    # MLP probes (nonlinear baseline) — multiple hidden sizes for scaling
+    mlps = {}
+    for l in elvs:
+        for t in TASKS:
+            for h in MLP_HIDDEN_SIZES:
+                mlps[(l,t,h)] = MLPProbe(hdim, TASK_N_CLASSES[t], hidden=h, dev=dev)
+    print(f"  Probes: {len(ema)} EMA + {len(mlps)} MLP + {len(shuffled_ema)} shuffled")
+
     mm = {(l,t): MassMean(hdim, TASK_N_CLASSES[t], dev) for l in elvs for t in TASKS}
     ridges = {l: Ridge(hdim, dev) for l in elvs}
 
@@ -411,18 +540,26 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda"):
         multi_layers = elvs
     cross_gram = CrossLayerGram(multi_layers, hdim, dev)
     print(f"  Multi-layer concat: {multi_layers} -> dim={hdim * len(multi_layers)}")
+    if max_batches > 0:
+        print(f"  Max batches: {max_batches}")
 
-    logs = []
+    all_log_rows = []
 
     capture = ActivationCapture(model, elvs, nl)
     oom_count = 0
 
     model.eval()
     global_bn = 0
+    done = False
     for epoch in range(epochs):
+        if done:
+            break
         if epochs > 1:
             print(f"  Epoch {epoch+1}/{epochs}")
         for bn, (enc, labs) in enumerate(tqdm(loader, desc=f"Train e{epoch+1}", dynamic_ncols=True)):
+            if max_batches > 0 and global_bn >= max_batches:
+                done = True; break
+
             ids = enc["input_ids"].to(dev)
             amask = enc["attention_mask"].to(dev)
 
@@ -436,8 +573,10 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda"):
                     capture.clear(); continue
 
                 tlabs = {t: labs[t].to(dev)[txid] for t in TASKS}
-                log = _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges, cross_gram, global_bn, dev)
-                logs.append(log)
+                rows = _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges,
+                                      cross_gram, global_bn, dev, ema_configs,
+                                      shuffled_ema=shuffled_ema, mlps=mlps)
+                all_log_rows.extend(rows)
                 capture.clear()
 
             except torch.cuda.OutOfMemoryError:
@@ -455,15 +594,28 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda"):
     capture.remove()
     if oom_count > 0:
         print(f"  Total OOM skips: {oom_count}/{bn+1} batches ({oom_count/(bn+1)*100:.1f}%)")
-    return ema, mm, ridges, cross_gram, multi_layers, pd.DataFrame(logs)
+    print(f"  Completed {global_bn} batches")
+    return ema, shuffled_ema, mlps, mm, ridges, cross_gram, multi_layers, pd.DataFrame(all_log_rows), ema_configs
 
 # ── Evaluate ─────────────────────────────────────────────────────────────
 
-def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl, dev="cuda"):
+def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl,
+             ema_configs=None, shuffled_ema=None, mlps=None, dev="cuda"):
+    if ema_configs is None:
+        ema_configs = EMA_CONFIGS
+
     keys = []
     for l in elvs:
         for t in TASKS:
-            keys += [("ema",l,t), ("ema_pool",l,t), ("mm",l,t)]
+            for ci, cfg in enumerate(ema_configs):
+                keys.append((cfg["name"],l,t))
+            if mlps:
+                for mlp_key in mlps:
+                    if mlp_key[0] == l and mlp_key[1] == t:
+                        keys.append((f"mlp_h{mlp_key[2]}",l,t))
+            if shuffled_ema:
+                keys.append(("shuffled",l,t))
+            keys += [("mm",l,t)]
             for lam in ridge_sols.get((l,t), {}):
                 keys.append((f"ridge_{lam}",l,t))
     for t in TASKS:
@@ -494,38 +646,51 @@ def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers,
         if bi.shape[0] == 0:
             capture.clear(); continue
 
-        # Also compute mean-pooled activations for legacy comparison
-        per_text_acts = {}
         per_tok_acts = {}
         for l in elvs:
             hs = capture.captured[l]  # (B, S, D)
             per_tok_acts[l] = hs[bi, ti].float()
-            masked = hs * amask.unsqueeze(-1)
-            per_text_acts[l] = (masked.sum(1).float() / lengths.unsqueeze(1).clamp(min=1).float())
 
         text_counts = torch.zeros(B, 1, device=dev)
         text_counts.scatter_add_(0, txid.unsqueeze(1), torch.ones(txid.shape[0], 1, device=dev))
 
         for l in elvs:
             a_tok = per_tok_acts[l]   # (N_tokens, D)
-            a_pool = per_text_acts[l]  # (B, D)
             for t in TASKS:
-                # ── EMA: per-token mean-logit aggregation ──
-                logits_tok = ema[(l,t)].predict(a_tok)
-                text_logits = torch.zeros(B, logits_tok.shape[1], device=dev)
-                text_logits.scatter_add_(0, txid.unsqueeze(1).expand_as(logits_tok), logits_tok)
-                text_logits = text_logits / text_counts.clamp(min=1)
-                preds_ema = text_logits.argmax(-1)
-                acc[("ema",l,t)]["tp"].extend(preds_ema.cpu().tolist())
-                acc[("ema",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
-                if t == "gender":
-                    probs = torch.softmax(text_logits, -1).cpu().numpy()
-                    acc[("ema",l,t)]["pr"].extend(probs.tolist())
+                # ── All EMA configs: per-token mean-logit aggregation ──
+                for ci, cfg in enumerate(ema_configs):
+                    logits_tok = ema[(l,t,ci)].predict(a_tok)
+                    text_logits = torch.zeros(B, logits_tok.shape[1], device=dev)
+                    text_logits.scatter_add_(0, txid.unsqueeze(1).expand_as(logits_tok), logits_tok)
+                    text_logits = text_logits / text_counts.clamp(min=1)
+                    preds = text_logits.argmax(-1)
+                    acc[(cfg["name"],l,t)]["tp"].extend(preds.cpu().tolist())
+                    acc[(cfg["name"],l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
+                    if t == "gender":
+                        probs = torch.softmax(text_logits, -1).cpu().numpy()
+                        acc[(cfg["name"],l,t)]["pr"].extend(probs.tolist())
 
-                # ── EMA: mean-pooled activations (legacy) ──
-                preds_pool = ema[(l,t)].predict(a_pool).argmax(-1)
-                acc[("ema_pool",l,t)]["tp"].extend(preds_pool.cpu().tolist())
-                acc[("ema_pool",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
+                # ── MLP probes: per-token ──
+                if mlps:
+                    for mlp_key, mlp in mlps.items():
+                        if mlp_key[0] != l or mlp_key[1] != t:
+                            continue
+                        h = mlp_key[2]  # hidden size
+                        logits_m = mlp.predict(a_tok)
+                        text_logits_m = torch.zeros(B, logits_m.shape[1], device=dev)
+                        text_logits_m.scatter_add_(0, txid.unsqueeze(1).expand_as(logits_m), logits_m)
+                        text_logits_m = text_logits_m / text_counts.clamp(min=1)
+                        acc[(f"mlp_h{h}",l,t)]["tp"].extend(text_logits_m.argmax(-1).cpu().tolist())
+                        acc[(f"mlp_h{h}",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
+
+                # ── Shuffled control: per-token ──
+                if shuffled_ema and (l,t) in shuffled_ema:
+                    logits_s = shuffled_ema[(l,t)].predict(a_tok)
+                    text_logits_s = torch.zeros(B, logits_s.shape[1], device=dev)
+                    text_logits_s.scatter_add_(0, txid.unsqueeze(1).expand_as(logits_s), logits_s)
+                    text_logits_s = text_logits_s / text_counts.clamp(min=1)
+                    acc[("shuffled",l,t)]["tp"].extend(text_logits_s.argmax(-1).cpu().tolist())
+                    acc[("shuffled",l,t)]["tl"].extend(batch_labels[t].cpu().tolist())
 
                 # ── Mass-mean: per-token ──
                 logits_mm = mm[(l,t)].predict(a_tok)
@@ -568,10 +733,10 @@ def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers,
         row = {"strategy": s, "layer": str(l), "task": t,
                "text_balanced_acc": round(balanced_accuracy_score(tl, tp), 5),
                "macro_f1": round(f1_score(tl, tp, average="macro", zero_division=0), 5)}
-        if t == "gender" and s == "ema" and a["pr"]:
+        if t == "gender" and s.startswith("ema_") and a["pr"]:
             try: row["auc_roc"] = round(roc_auc_score(tl, np.stack(a["pr"])[:,1]), 5)
             except: pass
-        if t == "star_sign" and s == "ema":
+        if t == "star_sign" and s.startswith("ema_"):
             rng = np.random.default_rng(42); n = len(tl)
             boots = [balanced_accuracy_score(tl[ii], tp[ii]) for ii in (rng.integers(0,n,size=n) for _ in range(1000))]
             row["bootstrap_ci_lo"] = round(float(np.percentile(boots, 2.5)), 5)
@@ -589,9 +754,11 @@ def main():
     pa.add_argument("--max_train_texts", type=int, default=0)
     pa.add_argument("--max_test_texts", type=int, default=10000)
     pa.add_argument("--epochs", type=int, default=1)
+    pa.add_argument("--max_train_batches", type=int, default=0,
+                    help="Cap training at N batches (0=unlimited). Use for fair cross-model comparison.")
     pa.add_argument("--eval_layer_stride", type=int, default=4)
-    pa.add_argument("--output_dir", default="/workspace/characterprobing/results/")
-    pa.add_argument("--data_path", default="/workspace/characterprobing/data/processed/blog_corpus.parquet")
+    pa.add_argument("--output_dir", default=str(BASE_DIR / "results"))
+    pa.add_argument("--data_path", default=str(BASE_DIR / "data" / "processed" / "blog_corpus.parquet"))
     pa.add_argument("--seed", type=int, default=SEED)
     pa.add_argument("--chat_template", action="store_true",
                     help="Wrap texts in chat template for instruct models")
@@ -602,14 +769,17 @@ def main():
     if args.chat_template:
         ms += "_chat"
     od = Path(args.output_dir); od.mkdir(parents=True, exist_ok=True)
-    pd_dir = Path("/workspace/characterprobing/probes") / ms
+    pd_dir = BASE_DIR / "probes" / ms
+
+    if not Path(args.data_path).exists():
+        sys.exit(f"ERROR: Data not found at {args.data_path}. Run 01_preprocess_data.py first.")
 
     tok = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     tok.padding_side = "right"
     if tok.pad_token is None: tok.pad_token = tok.eos_token
 
-    print(f"Loading {args.model_name} fp16 ...")
-    model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype=torch.float16,
+    print(f"Loading {args.model_name} bf16 ...")
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype=torch.bfloat16,
                                                   device_map="auto", trust_remote_code=True)
     model.eval()
     # torch.compile disabled — causes recompilation with variable-length inputs + hooks
@@ -628,20 +798,27 @@ def main():
         tst = Subset(tst, torch.randperm(len(tst))[:args.max_test_texts].tolist())
     print(f"  train={len(trn)}, test={len(tst)}")
 
-    tl = DataLoader(trn, batch_size=bs, shuffle=True, num_workers=8, pin_memory=True,
+    tl = DataLoader(trn, batch_size=bs, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True,
                     collate_fn=col, persistent_workers=True)
-    el = DataLoader(tst, batch_size=bs, shuffle=False, num_workers=8, pin_memory=True,
+    el = DataLoader(tst, batch_size=bs, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True,
                     collate_fn=col, persistent_workers=True)
 
     # TRAIN
-    print(f"\n{'='*60}\nTRAINING — {len(trn)} texts, {args.epochs} epoch(s)\n{'='*60}")
+    batch_info = f", max_batches={args.max_train_batches}" if args.max_train_batches > 0 else ""
+    print(f"\n{'='*60}\nTRAINING — {len(trn)} texts, {args.epochs} epoch(s){batch_info}\n{'='*60}")
     t0 = time.time()
-    ema, mm, ridges, cross_gram, multi_layers, ldf = train(model, tl, nl, hdim, args.tokens_per_text, elvs, epochs=args.epochs)
+    ema, shuffled_ema, mlps, mm, ridges, cross_gram, multi_layers, ldf, ema_configs = train(
+        model, tl, nl, hdim, args.tokens_per_text, elvs,
+        epochs=args.epochs, max_batches=args.max_train_batches)
     tt = time.time() - t0; print(f"Training: {tt:.1f}s")
 
     # Save everything
     pd_dir.mkdir(parents=True, exist_ok=True)
-    for (l,t), p in ema.items(): torch.save(p.state_dict(), pd_dir / f"L{l}_{t}_ema.pt")
+    for (l,t,ci), p in ema.items():
+        torch.save(p.state_dict(), pd_dir / f"L{l}_{t}_ema_c{ci}.pt")
+    for (l,t,h), p in mlps.items(): torch.save(p.state_dict(), pd_dir / f"L{l}_{t}_mlp_h{h}.pt")
+    for (l,t), p in shuffled_ema.items():
+        torch.save(p.state_dict(), pd_dir / f"L{l}_{t}_shuffled.pt")
     for (l,t), p in mm.items(): torch.save({"sums": p.sums.cpu(), "counts": p.counts.cpu()}, pd_dir / f"L{l}_{t}_mm.pt")
     for l, r in ridges.items(): torch.save(r.state_dict(), pd_dir / f"L{l}_ridge.pt")
     # Save cross-layer Gram blocks (enables re-solving multi-layer without rerunning)
@@ -649,8 +826,12 @@ def main():
     for (li, lj), block in cross_gram.blocks.items():
         cross_state[f"block_{li}_{lj}"] = block.cpu()
     torch.save(cross_state, pd_dir / "cross_gram.pt")
-    ldf.to_csv(od / f"{ms}_training_losses.csv", index=False)
-    print(f"  Saved: probes, ridge grams, cross-layer grams, mass-mean, losses")
+    # Save EMA config metadata
+    torch.save(ema_configs, pd_dir / "ema_configs.pt")
+    ldf.to_csv(od / f"{ms}_training_log.csv", index=False)
+    # Completion marker — if this exists, training finished successfully
+    (pd_dir / "_COMPLETE").touch()
+    print(f"  Saved: {len(ema)} EMA + {len(mlps)} MLP + {len(shuffled_ema)} shuffled + ridge + mm")
 
     # Solve ridges
     print("Solving ridge regressions ...")
@@ -677,7 +858,8 @@ def main():
     # EVALUATE
     print(f"\n{'='*60}\nEVALUATION — {len(tst)} texts\n{'='*60}")
     t0 = time.time()
-    rdf = evaluate(model, el, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl)
+    rdf = evaluate(model, el, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl,
+                   ema_configs=ema_configs, shuffled_ema=shuffled_ema, mlps=mlps)
     et = time.time() - t0; print(f"Evaluation: {et:.1f}s")
 
     rdf.insert(0, "model_name", args.model_name)

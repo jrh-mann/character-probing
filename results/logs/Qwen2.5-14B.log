@@ -1,57 +1,0 @@
-`torch_dtype` is deprecated! Use `dtype` instead!
-Loading Qwen/Qwen2.5-14B fp16 ...
-Loading weights:   0%|          | 0/579 [00:00<?, ?it/s]Loading weights:   0%|          | 1/579 [00:09<1:29:20,  9.27s/it]Loading weights:   0%|          | 2/579 [00:09<38:16,  3.98s/it]  Loading weights:   6%|▌         | 34/579 [00:09<01:19,  6.86it/s]Loading weights:   8%|▊         | 49/579 [00:10<00:53,  9.82it/s]Loading weights:  10%|█         | 60/579 [00:11<00:51, 10.13it/s]Loading weights:  12%|█▏        | 67/579 [00:11<00:50, 10.15it/s]Loading weights:  12%|█▏        | 72/579 [00:12<00:50, 10.10it/s]Loading weights:  13%|█▎        | 76/579 [00:12<00:54,  9.29it/s]Loading weights:  15%|█▍        | 84/579 [00:13<00:43, 11.38it/s]Loading weights:  15%|█▌        | 88/579 [00:14<00:50,  9.66it/s]Loading weights:  16%|█▌        | 90/579 [00:14<00:49,  9.82it/s]Loading weights:  17%|█▋        | 100/579 [00:15<00:50,  9.40it/s]Loading weights:  19%|█▊        | 108/579 [00:15<00:35, 13.45it/s]Loading weights:  19%|█▉        | 112/579 [00:16<00:53,  8.75it/s]Loading weights:  21%|██        | 120/579 [00:16<00:39, 11.67it/s]Loading weights:  21%|██▏       | 124/579 [00:17<00:52,  8.73it/s]Loading weights:  22%|██▏       | 126/579 [00:17<00:49,  9.16it/s]Loading weights:  23%|██▎       | 132/579 [00:17<00:35, 12.74it/s]Loading weights:  23%|██▎       | 136/579 [00:18<00:47,  9.34it/s]Loading weights:  25%|██▌       | 145/579 [00:18<00:28, 15.50it/s]Loading weights:  26%|██▌       | 149/579 [00:19<00:44,  9.77it/s]Loading weights:  27%|██▋       | 159/579 [00:19<00:26, 15.78it/s]Loading weights:  28%|██▊       | 164/579 [00:20<00:39, 10.56it/s]Loading weights:  30%|██▉       | 172/579 [00:22<00:46,  8.82it/s]Loading weights:  30%|███       | 175/579 [00:22<00:48,  8.40it/s]Loading weights:  32%|███▏      | 184/579 [00:23<00:51,  7.72it/s]Loading weights:  32%|███▏      | 186/579 [00:24<00:54,  7.25it/s]Loading weights:  34%|███▍      | 196/579 [00:25<00:43,  8.74it/s]Loading weights:  36%|███▌      | 208/579 [00:26<00:46,  8.06it/s]Loading weights:  36%|███▋      | 210/579 [00:27<00:47,  7.80it/s]Loading weights:  37%|███▋      | 213/579 [00:27<00:42,  8.64it/s]Loading weights:  38%|███▊      | 220/579 [00:28<00:49,  7.29it/s]Loading weights:  39%|███▉      | 228/579 [00:28<00:33, 10.60it/s]Loading weights:  40%|████      | 232/579 [00:29<00:41,  8.29it/s]Loading weights:  41%|████▏     | 240/579 [00:29<00:28, 11.74it/s]Loading weights:  42%|████▏     | 244/579 [00:30<00:43,  7.72it/s]Loading weights:  43%|████▎     | 247/579 [00:31<00:37,  8.76it/s]Loading weights:  44%|████▍     | 256/579 [00:31<00:35,  9.12it/s]Loading weights:  46%|████▌     | 266/579 [00:32<00:21, 14.44it/s]Loading weights:  47%|████▋     | 270/579 [00:33<00:31,  9.89it/s]Loading weights:  48%|████▊     | 278/579 [00:33<00:22, 13.48it/s]Loading weights:  49%|████▊     | 282/579 [00:34<00:32,  9.06it/s]Loading weights:  50%|█████     | 290/579 [00:34<00:21, 13.31it/s]Loading weights:  51%|█████     | 294/579 [00:35<00:28,  9.97it/s]Loading weights:  52%|█████▏    | 302/579 [00:35<00:18, 14.59it/s]Loading weights:  53%|█████▎    | 306/579 [00:36<00:25, 10.55it/s]Loading weights:  55%|█████▍    | 316/579 [00:36<00:24, 10.87it/s]Loading weights:  55%|█████▌    | 319/579 [00:37<00:23, 11.13it/s]Loading weights:  57%|█████▋    | 328/579 [00:38<00:23, 10.68it/s]Loading weights:  58%|█████▊    | 336/579 [00:38<00:16, 14.33it/s]Loading weights:  59%|█████▊    | 340/579 [00:39<00:22, 10.40it/s]Loading weights:  59%|█████▉    | 342/579 [00:39<00:23,  9.91it/s]Loading weights:  61%|██████    | 352/579 [00:40<00:23,  9.52it/s]Loading weights:  62%|██████▏   | 360/579 [00:40<00:16, 13.65it/s]Loading weights:  63%|██████▎   | 364/579 [00:41<00:24,  8.93it/s]Loading weights:  65%|██████▍   | 375/579 [00:41<00:13, 14.71it/s]Loading weights:  66%|██████▌   | 380/579 [00:42<00:18, 10.51it/s]Loading weights:  67%|██████▋   | 386/579 [00:42<00:15, 12.19it/s]Loading weights:  67%|██████▋   | 389/579 [00:44<00:24,  7.85it/s]Loading weights:  69%|██████▉   | 400/579 [00:45<00:20,  8.94it/s]Loading weights:  71%|███████   | 412/579 [00:45<00:15, 10.82it/s]Loading weights:  72%|███████▏  | 414/579 [00:46<00:15, 10.96it/s]Loading weights:  73%|███████▎  | 420/579 [00:46<00:11, 13.99it/s]Loading weights:  73%|███████▎  | 424/579 [00:46<00:13, 11.42it/s]Loading weights:  74%|███████▎  | 426/579 [00:46<00:13, 11.72it/s]Loading weights:  75%|███████▍  | 432/579 [00:47<00:09, 14.90it/s]Loading weights:  75%|███████▌  | 436/579 [00:47<00:14,  9.75it/s]Loading weights:  77%|███████▋  | 446/579 [00:48<00:07, 17.00it/s]Loading weights:  78%|███████▊  | 450/579 [00:48<00:12, 10.24it/s]Loading weights:  79%|███████▉  | 460/579 [00:49<00:10, 10.98it/s]Loading weights:  82%|████████▏ | 472/579 [00:50<00:09, 11.87it/s]Loading weights:  82%|████████▏ | 475/579 [00:50<00:08, 12.64it/s]Loading weights:  84%|████████▎ | 484/579 [00:51<00:08, 10.79it/s]Loading weights:  85%|████████▌ | 495/579 [00:52<00:05, 16.17it/s]Loading weights:  86%|████████▌ | 499/579 [00:52<00:07, 11.06it/s]Loading weights:  87%|████████▋ | 506/579 [00:53<00:05, 14.49it/s]Loading weights:  88%|████████▊ | 510/579 [00:54<00:07,  9.37it/s]Loading weights:  90%|████████▉ | 520/579 [00:55<00:06,  9.18it/s]Loading weights:  92%|█████████▏| 530/579 [00:55<00:03, 13.68it/s]Loading weights:  92%|█████████▏| 534/579 [00:56<00:04,  9.22it/s]Loading weights:  94%|█████████▍| 544/579 [00:57<00:03,  8.91it/s]Loading weights:  94%|█████████▍| 547/579 [00:57<00:03,  9.82it/s]Loading weights:  96%|█████████▌| 554/579 [00:57<00:01, 13.15it/s]Loading weights:  96%|█████████▋| 558/579 [00:58<00:02,  9.05it/s]Loading weights:  98%|█████████▊| 568/579 [00:59<00:01, 10.72it/s]Loading weights:  99%|█████████▊| 571/579 [00:59<00:00, 11.74it/s]Loading weights: 100%|██████████| 579/579 [00:59<00:00,  9.69it/s]
-Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
-  Auto batch size: 16 (peak 43.7GB / 47.7GB, target 80%)
-  hdim=5120, layers=48, bs=16, eval_layers=[0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]
-  train=150701, test=10000
-
-============================================================
-TRAINING — 150701 texts
-============================================================
-Train:   0%|          | 0/9419 [00:00<?, ?it/s]Train:   0%|          | 1/9419 [00:39<102:17:38, 39.10s/it]Train:   0%|          | 2/9419 [00:47<55:41:18, 21.29s/it] Train:   0%|          | 3/9419 [00:57<41:22:53, 15.82s/it]Train:   0%|          | 3/9419 [00:59<52:12:25, 19.96s/it]
-Traceback (most recent call last):
-  File "/workspace/characterprobing/scripts/02_run_probes.py", line 555, in <module>
-    main()
-  File "/workspace/characterprobing/scripts/02_run_probes.py", line 490, in main
-    ema, mm, ridges, reservoir, ldf = train(model, tl, nl, hdim, args.tokens_per_text, elvs)
-                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/workspace/characterprobing/scripts/02_run_probes.py", line 323, in train
-    model.model(input_ids=ids, attention_mask=amask)
-  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/transformers/utils/generic.py", line 917, in wrapper
-    output = func(self, *args, **kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/transformers/utils/output_capturing.py", line 253, in wrapper
-    outputs = func(self, *args, **kwargs)
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/transformers/models/qwen2/modeling_qwen2.py", line 411, in forward
-    hidden_states = decoder_layer(
-                    ^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/transformers/modeling_layers.py", line 93, in __call__
-    return super().__call__(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/transformers/models/qwen2/modeling_qwen2.py", line 313, in forward
-    hidden_states = self.mlp(hidden_states)
-                    ^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1553, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/torch/nn/modules/module.py", line 1562, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.11/dist-packages/transformers/models/qwen2/modeling_qwen2.py", line 47, in forward
-    down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^~~~~~~~~~~~~~~~~
-torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 364.00 MiB. GPU 0 has a total capacity of 44.45 GiB of which 77.31 MiB is free. Process 2651116 has 34.97 GiB memory in use. Process 2651342 has 9.38 GiB memory in use. Of the allocated memory 33.99 GiB is allocated by PyTorch, and 682.38 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

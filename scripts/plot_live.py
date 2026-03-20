@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Plot training losses and accuracies from all available loss CSVs. Run anytime."""
+"""Plot training losses, accuracies, and scaling curves from all available CSVs. Run anytime."""
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+import re
 import sys
 
 plt.rcParams.update({
@@ -13,356 +14,247 @@ plt.rcParams.update({
 })
 
 TASK_COLORS = {"age_bin": "#FF6B6B", "gender": "#4ECDC4", "star_sign": "#FFE66D"}
-RESULTS = Path("/workspace/characterprobing/results")
-FIGS = Path("/root/characterprobing/figures")
+CHANCE = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
+BASE_DIR = Path(__file__).resolve().parent.parent
+RESULTS = BASE_DIR / "results"
+FIGS = BASE_DIR / "figures"
 FIGS.mkdir(parents=True, exist_ok=True)
 
-csvs = sorted(RESULTS.glob("*_training_losses.csv"))
-if not csvs:
-    print("No training loss CSVs found."); sys.exit(0)
+# ── Helpers ──────────────────────────────────────────────────────────────
 
-print(f"Found {len(csvs)} loss files")
+def model_short_name(name):
+    """Extract short display name from model_name or filename."""
+    s = name.split("/")[-1]
+    for prefix in ["Qwen2.5-", "Qwen3-", "gemma-3-", "Llama-3.2-", "Llama-3.1-", "Meta-Llama-3-"]:
+        s = s.replace(prefix, "")
+    return s.replace("-Base", "").replace("-pt", "")
 
-# Find which layers are logged (varies by model)
-def get_logged_layers(df):
-    cols = [c for c in df.columns if c.startswith("loss_L")]
-    return sorted(set(int(c.split("_")[1][1:]) for c in cols))
+def model_size_B(name):
+    """Extract approximate size in billions from model name."""
+    s = name.split("/")[-1]
+    m = re.search(r'(\d+\.?\d*)[Bb]', s)
+    if m:
+        return float(m.group(1))
+    # Handle Gemma naming like "gemma-3-1b-pt"
+    m = re.search(r'-(\d+)b', s, re.IGNORECASE)
+    if m:
+        return float(m.group(1))
+    # Handle "270m" etc
+    m = re.search(r'(\d+)[Mm]', s)
+    if m:
+        return float(m.group(1)) / 1000
+    return 0
 
-# Plot losses
-fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-fig.suptitle("Training Loss (best logged layer per model)", fontsize=16, fontweight='bold')
+def model_family(name):
+    """Extract model family from name."""
+    s = name.split("/")[-1] if "/" in name else name
+    if "Qwen2.5" in s: return "Qwen2.5"
+    if "Qwen3" in s: return "Qwen3"
+    if "gemma" in s.lower(): return "Gemma3"
+    if "llama" in s.lower() or "Llama" in s: return "Llama"
+    return "Other"
 
-for ax, task in zip(axes, ["age_bin", "gender", "star_sign"]):
-    ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
-    ax.set_xlabel("Batch (log)"); ax.set_ylabel("Loss"); ax.set_xscale("log"); ax.grid(True, alpha=0.3)
+FAMILY_COLORS = {
+    "Qwen2.5": "#4ECDC4",
+    "Qwen3": "#FF6B6B",
+    "Gemma3": "#FFE66D",
+    "Llama": "#B39DDB",
+    "Other": "#999999",
+}
 
-    for csv in csvs:
-        name = csv.stem.replace("_training_losses", "")
-        df = pd.read_csv(csv)
-        layers = get_logged_layers(df)
-        best_l, best_loss = layers[0], 999
-        for l in layers:
-            col = f"loss_L{l}_{task}"
-            if col in df.columns:
-                fl = df[col].iloc[-max(1, len(df)//10):].mean()
-                if fl < best_loss:
-                    best_l, best_loss = l, fl
+# ── Training loss/accuracy plots (long-format CSVs) ──────────────────────
 
-        col = f"loss_L{best_l}_{task}"
-        if col not in df.columns: continue
-        raw = df[col].values
-        w = max(1, len(raw) // 50)
-        smooth = pd.Series(raw).rolling(w, min_periods=1, center=True).mean().values
+csvs = sorted(RESULTS.glob("*_training_log.csv"))
+if csvs:
+    print(f"Found {len(csvs)} training log files")
 
-        is_it = "Instruct" in name or "chat" in name
-        size = name.replace("Qwen2.5-", "").replace("-Instruct", "").replace("_chat", "")
-        ax.plot(range(len(smooth)), smooth, linewidth=1.5,
-                linestyle="--" if is_it else "-",
-                label=f"{size}{'(IT)' if 'Instruct' in name else ''}{' chat' if 'chat' in name else ''}")
-    ax.legend(fontsize=8, loc="upper right", facecolor='#1a1a2e', edgecolor='#444')
+    # Use the default EMA config for plotting
+    DEFAULT_CONFIG = "ema_lr1e-2"
 
-plt.tight_layout()
-fig.savefig(FIGS / "live_training_losses.png", dpi=150, bbox_inches="tight")
-print(f"Saved {FIGS / 'live_training_losses.png'}")
-
-# Plot accuracies (if available)
-has_acc = False
-for csv in csvs:
-    df = pd.read_csv(csv)
-    if any("acc_L" in c for c in df.columns):
-        has_acc = True; break
-
-if has_acc:
-    # Batch sizes used per model size (from auto_bs)
-    MODEL_BS = {"0.5B": 128, "1.5B": 128, "3B": 64, "7B": 32, "14B": 16}
-    MAX_SEQ = 1024
-
-    def get_bs(name):
-        for k in MODEL_BS:
-            if k in name: return MODEL_BS[k]
-        return 64
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle("Training Loss (default config, best layer per model)", fontsize=16, fontweight='bold')
 
     fig2, axes2 = plt.subplots(1, 3, figsize=(18, 6))
-    fig2.suptitle("Running Train Accuracy vs Tokens Seen (best logged layer)", fontsize=16, fontweight='bold')
+    fig2.suptitle("Training Accuracy (default config, best layer)", fontsize=16, fontweight='bold')
 
-    for ax, task in zip(axes2, ["age_bin", "gender", "star_sign"]):
-        ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
-        ax.set_xlabel("Tokens (log)"); ax.set_ylabel("Accuracy"); ax.set_xscale("log"); ax.grid(True, alpha=0.3)
-        chance = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
-        ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
+    for task_i, task in enumerate(["age_bin", "gender", "star_sign"]):
+        ax_loss = axes[task_i]
+        ax_acc = axes2[task_i]
+        for ax in (ax_loss, ax_acc):
+            ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
+            ax.set_xlabel("Batch"); ax.grid(True, alpha=0.3)
+        ax_loss.set_ylabel("Loss")
+        ax_acc.set_ylabel("Batch Accuracy")
+        ax_acc.axhline(CHANCE[task], color='white', linestyle=':', alpha=0.4)
 
         for csv in csvs:
-            name = csv.stem.replace("_training_losses", "")
-            df = pd.read_csv(csv)
-            layers = get_logged_layers(df)
-            best_l = layers[-1]  # use deepest layer for acc
-            col = f"acc_L{best_l}_{task}"
-            if col not in df.columns: continue
+            name = csv.stem.replace("_training_log", "")
+            try:
+                df = pd.read_csv(csv)
+            except Exception:
+                continue
 
-            bs = get_bs(name)
-            tokens = df["batch"].values * bs * MAX_SEQ
+            # Filter to default config and this task
+            sub = df[(df["config"] == DEFAULT_CONFIG) & (df["task"] == task)]
+            if len(sub) == 0:
+                continue
 
-            is_it = "Instruct" in name or "chat" in name
-            size = name.replace("Qwen2.5-", "").replace("-Instruct", "").replace("_chat", "")
-            ax.plot(tokens, df[col].values, linewidth=1.5,
-                    linestyle="--" if is_it else "-",
-                    label=f"{size}{'(IT)' if 'Instruct' in name else ''}{'chat' if 'chat' in name else ''}")
-        ax.legend(fontsize=8, loc="lower right", facecolor='#1a1a2e', edgecolor='#444')
+            # Pick best layer (lowest final loss)
+            final_loss = sub.groupby("layer")["loss"].apply(lambda x: x.iloc[-max(1, len(x)//10):].mean())
+            best_layer = final_loss.idxmin()
+            layer_data = sub[sub["layer"] == best_layer].sort_values("batch")
 
+            # Smooth
+            w = max(1, len(layer_data) // 50)
+            loss_smooth = layer_data["loss"].rolling(w, min_periods=1, center=True).mean().values
+            acc_smooth = layer_data["batch_acc"].rolling(w, min_periods=1, center=True).mean().values
+            batches = layer_data["batch"].values
+
+            family = model_family(name)
+            color = FAMILY_COLORS.get(family, "#999")
+            ax_loss.plot(batches, loss_smooth, linewidth=1.5, color=color, label=model_short_name(name))
+            ax_acc.plot(batches, acc_smooth, linewidth=1.5, color=color, label=model_short_name(name))
+
+        for ax in (ax_loss, ax_acc):
+            ax.legend(fontsize=7, loc="best", facecolor='#1a1a2e', edgecolor='#444')
+
+    plt.figure(fig.number)
+    plt.tight_layout()
+    fig.savefig(FIGS / "live_training_losses.png", dpi=150, bbox_inches="tight")
+    print(f"Saved {FIGS / 'live_training_losses.png'}")
+
+    plt.figure(fig2.number)
     plt.tight_layout()
     fig2.savefig(FIGS / "live_training_acc.png", dpi=150, bbox_inches="tight")
     print(f"Saved {FIGS / 'live_training_acc.png'}")
 
-    # ── Per-model-size comparison: base vs instruct vs chat ────────────
-    import re
-    SIZES = ["0.5B", "1.5B", "3B", "7B"]
-    TASK_LINES = {"age_bin": "-", "gender": "--", "star_sign": ":"}
-    VARIANT_COLORS = {"base": "#4ECDC4", "instruct": "#FF6B6B", "chat": "#FFE66D"}
+    plt.close('all')
+else:
+    print("No training log CSVs found.")
 
-    # Group CSVs by model size
-    size_groups = {s: [] for s in SIZES}
-    for csv in csvs:
-        name = csv.stem.replace("_training_losses", "")
-        for s in SIZES:
-            if s in name:
-                # Determine variant
-                if "_chat" in name:
-                    variant = "chat"
-                elif "Instruct" in name:
-                    variant = "instruct"
-                else:
-                    variant = "base"
-                size_groups[s].append((csv, name, variant))
-                break
+# ── Results summary + scaling curve ──────────────────────────────────────
 
-    active_sizes = [s for s in SIZES if size_groups[s]]
-    n_sizes = len(active_sizes)
-    if n_sizes > 0:
-        fig3, axes3 = plt.subplots(1, n_sizes, figsize=(6 * n_sizes, 6))
-        if n_sizes == 1: axes3 = [axes3]
-        fig3.suptitle("Accuracy vs Tokens — Base vs Instruct vs Chat (by model size)",
-                       fontsize=16, fontweight='bold')
-
-        for ax, size in zip(axes3, active_sizes):
-            ax.set_title(f"Qwen2.5-{size}", fontsize=14)
-            ax.set_xlabel("Tokens"); ax.set_ylabel("Accuracy")
-            ax.set_xscale("log"); ax.grid(True, alpha=0.3)
-            # Chance lines
-            for task, ch in [("age_bin", 1/3), ("gender", 0.5), ("star_sign", 1/12)]:
-                ax.axhline(ch, color='grey', linestyle=':', alpha=0.3, linewidth=0.8)
-
-            for csv_f, name, variant in size_groups[size]:
-                df = pd.read_csv(csv_f)
-                layers = get_logged_layers(df)
-                best_l = layers[-1]
-                bs = get_bs(name)
-                tokens = df["batch"].values * bs * MAX_SEQ
-
-                for task, ls in TASK_LINES.items():
-                    col = f"acc_L{best_l}_{task}"
-                    if col not in df.columns: continue
-                    # Smooth a bit
-                    raw = df[col].values
-                    w = max(1, len(raw) // 80)
-                    smooth = pd.Series(raw).rolling(w, min_periods=1, center=True).mean().values
-                    ax.plot(tokens, smooth, linewidth=1.8,
-                            color=VARIANT_COLORS[variant], linestyle=ls,
-                            label=f"{variant} · {task.replace('_',' ')}")
-
-            # De-duplicate legend
-            handles, labels = ax.get_legend_handles_labels()
-            by_label = dict(zip(labels, handles))
-            ax.legend(by_label.values(), by_label.keys(), fontsize=7,
-                      loc="upper left", facecolor='#1a1a2e', edgecolor='#444')
-
-        plt.tight_layout()
-        fig3.savefig(FIGS / "acc_by_model_size.png", dpi=150, bbox_inches="tight")
-        print(f"Saved {FIGS / 'acc_by_model_size.png'}")
-
-# Also print a quick summary table of completed results
 result_csvs = sorted(RESULTS.glob("*_per_layer_results.csv"))
 if result_csvs:
     print(f"\n{'='*60}")
     print(f"COMPLETED RESULTS ({len(result_csvs)} models)")
     print(f"{'='*60}")
+
+    all_df = pd.concat([pd.read_csv(c) for c in result_csvs], ignore_index=True)
+
+    # Print summary for default EMA config
+    default_strat = "ema_lr1e-2"
     for csv in result_csvs:
         df = pd.read_csv(csv)
         model = csv.stem.replace("_per_layer_results", "")
-        for strat in ["ema", "ridge_1.0", "multi_1.0"]:
-            sdf = df[df["strategy"] == strat]
-            if len(sdf) == 0: continue
-            line = f"  {model:>30} [{strat:>10}]"
-            for task in ["age_bin", "gender", "star_sign"]:
-                tdf = sdf[sdf["task"] == task]
-                if len(tdf) == 0: line += "     N/A"; continue
+        sdf = df[df["strategy"] == default_strat]
+        if len(sdf) == 0:
+            # Fallback to old "ema" strategy name
+            sdf = df[df["strategy"] == "ema"]
+        if len(sdf) == 0:
+            continue
+        line = f"  {model:>30}"
+        for task in ["age_bin", "gender", "star_sign"]:
+            tdf = sdf[sdf["task"] == task]
+            if len(tdf) == 0:
+                line += "     N/A"
+            else:
                 best = tdf["text_balanced_acc"].max()
                 line += f"  {task}={best:.3f}"
-            print(line)
+        print(line)
 
-# ── Scaling curve ────────────────────────────────────────────────────────
-if len(result_csvs) >= 2:
-    import matplotlib.pyplot as plt
-    plt.rcParams.update({
-        'figure.facecolor': '#1a1a2e', 'axes.facecolor': '#1a1a2e',
-        'axes.edgecolor': '#444', 'axes.labelcolor': '#ddd',
-        'text.color': '#ddd', 'xtick.color': '#aaa', 'ytick.color': '#aaa',
-        'grid.color': '#333', 'grid.alpha': 0.5,
-    })
-    all_df = pd.concat([pd.read_csv(c) for c in result_csvs], ignore_index=True)
-    def get_size(n):
-        s = n.split("/")[-1].replace("Qwen2.5-","").replace("-Instruct","").replace("_chat","")
-        return float(s.replace("B",""))
-    all_df["size_B"] = all_df["model_name"].apply(get_size)
-    all_df["is_instruct"] = all_df["model_name"].str.contains("Instruct")
+    # Print shuffled control comparison
+    shuf = all_df[all_df["strategy"] == "shuffled"]
+    if len(shuf) > 0:
+        print(f"\n  SHUFFLED CONTROL (should be near chance):")
+        for task in ["age_bin", "gender", "star_sign"]:
+            tdf = shuf[shuf["task"] == task]
+            if len(tdf) > 0:
+                mean_acc = tdf.groupby("layer")["text_balanced_acc"].max().mean()
+                print(f"    {task}: {mean_acc:.3f} (chance={CHANCE[task]:.3f})")
 
-    strats = {"ema": ("EMA Linear","o"), "mm": ("Mass-Mean","s"), "multi_1.0": ("Multi-layer Ridge","D")}
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    fig.suptitle("Scaling Curve: Probe Accuracy vs Model Size", fontsize=16, fontweight='bold')
-    for ax, task in zip(axes, ["age_bin", "gender", "star_sign"]):
-        ax.set_title(task.replace("_"," ").title(), fontsize=14, color=TASK_COLORS[task])
-        ax.set_xlabel("Model Size (B)"); ax.set_ylabel("Balanced Accuracy")
-        ax.set_xscale("log"); ax.grid(True, alpha=0.3)
-        chance = {"age_bin":1/3,"gender":0.5,"star_sign":1/12}
-        ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
-        base = all_df[~all_df["is_instruct"]]
-        for st, (label, marker) in strats.items():
-            tdf = base[(base["strategy"]==st) & (base["task"]==task)]
-            if len(tdf)==0: continue
-            best = tdf.groupby("size_B")["text_balanced_acc"].max().reset_index().sort_values("size_B")
-            ax.plot(best["size_B"], best["text_balanced_acc"], marker=marker, markersize=8, linewidth=2, label=label)
-        ax.legend(fontsize=9, loc="lower right", facecolor='#1a1a2e', edgecolor='#444')
-    plt.tight_layout()
-    fig.savefig(FIGS / "scaling_curve.png", dpi=150, bbox_inches="tight")
-    fig.savefig(FIGS / "scaling_curve.pdf", bbox_inches="tight")
-    print(f"Saved {FIGS / 'scaling_curve.png'}")
+    # ── Scaling curve ────────────────────────────────────────────────
+    if len(result_csvs) >= 2:
+        all_df["size_B"] = all_df["model_name"].apply(model_size_B)
+        all_df["family"] = all_df["model_name"].apply(model_family)
 
-# ── Layer-by-layer accuracy ─────────────────────────────────────────────
-if result_csvs:
-    import matplotlib.pyplot as plt
-    plt.rcParams.update({
-        'figure.facecolor': '#1a1a2e', 'axes.facecolor': '#1a1a2e',
-        'axes.edgecolor': '#444', 'axes.labelcolor': '#ddd',
-        'text.color': '#ddd', 'xtick.color': '#aaa', 'ytick.color': '#aaa',
-        'grid.color': '#333', 'grid.alpha': 0.5,
-    })
-    dfs = []
-    for c in result_csvs:
-        d = pd.read_csv(c)
-        # Tag with filename to distinguish chat vs non-chat
-        fname = c.stem.replace("_per_layer_results", "")
-        d["source"] = fname
-        dfs.append(d)
-    all_lr = pd.concat(dfs, ignore_index=True)
-    # Only EMA strategy for clarity
-    ema_df = all_lr[all_lr["strategy"] == "ema"].copy()
+        # Pick best EMA strategy (any config starting with "ema_")
+        ema_df = all_df[all_df["strategy"].str.startswith("ema_")].copy()
+        # Exclude shuffled
+        ema_df = ema_df[ema_df["strategy"] != "shuffled"]
 
-    # Normalise layer index to [0, 1] so models with different depths are comparable
-    def get_total_layers(model_name):
-        s = model_name.split("/")[-1].replace("Qwen2.5-","").replace("-Instruct","").replace("_chat","")
-        size = float(s.replace("B",""))
-        # Qwen2.5 layer counts
-        return {0.5: 24, 1.5: 28, 3: 36, 7: 28, 14: 40}.get(size, 32)
+        if len(ema_df) > 0:
+            fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+            fig.suptitle("Scaling Curve: Best EMA Probe Accuracy vs Model Size", fontsize=16, fontweight='bold')
 
-    ema_df["total_layers"] = ema_df["model_name"].apply(get_total_layers)
-    ema_df["layer"] = pd.to_numeric(ema_df["layer"], errors="coerce")
-    ema_df["layer_frac"] = ema_df["layer"] / ema_df["total_layers"]
+            for ax, task in zip(axes, ["age_bin", "gender", "star_sign"]):
+                ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
+                ax.set_xlabel("Model Size (B)"); ax.set_ylabel("Balanced Accuracy")
+                ax.set_xscale("log"); ax.grid(True, alpha=0.3)
+                ax.axhline(CHANCE[task], color='white', linestyle=':', alpha=0.4)
 
-    # Short display name from source (filename-based)
-    def short_name(s):
-        return s.replace("Qwen2.5-", "")
-    ema_df["short"] = ema_df["source"].apply(short_name)
+                tdf = ema_df[ema_df["task"] == task]
+                for family in sorted(tdf["family"].unique()):
+                    fdf = tdf[tdf["family"] == family]
+                    best = fdf.groupby("size_B")["text_balanced_acc"].max().reset_index().sort_values("size_B")
+                    if len(best) == 0:
+                        continue
+                    ax.plot(best["size_B"], best["text_balanced_acc"],
+                            marker="o", markersize=8, linewidth=2,
+                            color=FAMILY_COLORS.get(family, "#999"),
+                            label=family)
 
-    # Color by model size, style by variant
-    SIZE_COLORS = {"0.5B": "#66c2a5", "1.5B": "#fc8d62", "3B": "#8da0cb", "7B": "#e78ac3", "14B": "#a6d854"}
-    def get_size_key(name):
-        for k in ["0.5B", "1.5B", "3B", "7B", "14B"]:
-            if k in name: return k
-        return "?"
+                ax.legend(fontsize=9, loc="lower right", facecolor='#1a1a2e', edgecolor='#444')
 
-    tasks = ["age_bin", "gender", "star_sign"]
-    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-    fig.suptitle("Probe Accuracy by Layer (EMA Linear, all models)", fontsize=16, fontweight='bold')
+            plt.tight_layout()
+            fig.savefig(FIGS / "scaling_curve.png", dpi=150, bbox_inches="tight")
+            fig.savefig(FIGS / "scaling_curve.pdf", bbox_inches="tight")
+            print(f"Saved {FIGS / 'scaling_curve.png'}")
+            plt.close('all')
 
-    for ax, task in zip(axes, tasks):
-        ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
-        ax.set_xlabel("Relative Layer Depth"); ax.set_ylabel("Balanced Accuracy")
-        ax.grid(True, alpha=0.3)
-        chance = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
-        ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
+    # ── Layer-by-layer accuracy ──────────────────────────────────────
+    ema_results = all_df[all_df["strategy"].str.startswith("ema_") & (all_df["strategy"] != "shuffled")].copy()
+    if len(ema_results) > 0:
+        ema_results["layer"] = pd.to_numeric(ema_results["layer"], errors="coerce")
+        # Compute max layer per model to normalize depth
+        max_layers = ema_results.groupby("model_name")["layer"].max()
+        ema_results["total_layers"] = ema_results["model_name"].map(max_layers)
+        ema_results["layer_frac"] = ema_results["layer"] / ema_results["total_layers"]
+        ema_results["family"] = ema_results["model_name"].apply(model_family)
+        ema_results["short"] = ema_results["model_name"].apply(model_short_name)
+        ema_results["size_B"] = ema_results["model_name"].apply(model_size_B)
 
-        tdf = ema_df[ema_df["task"] == task]
-        for model_short in sorted(tdf["short"].unique()):
-            mdf = tdf[tdf["short"] == model_short].sort_values("layer_frac")
-            sk = get_size_key(model_short)
-            is_it = "Instruct" in model_short
-            is_chat = "chat" in model_short
-            ls = ":" if is_chat else ("--" if is_it else "-")
-            ax.plot(mdf["layer_frac"], mdf["text_balanced_acc"],
-                    marker="o", markersize=4, linewidth=1.5,
-                    color=SIZE_COLORS.get(sk, "#999"), linestyle=ls,
-                    label=model_short)
+        # Best accuracy across all EMA configs per (model, layer, task)
+        best_per_layer = ema_results.groupby(
+            ["model_name", "short", "family", "size_B", "layer", "layer_frac", "total_layers", "task"]
+        )["text_balanced_acc"].max().reset_index()
 
-        ax.legend(fontsize=7, loc="best", facecolor='#1a1a2e', edgecolor='#444', ncol=2)
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig.suptitle("Probe Accuracy by Relative Layer Depth (best EMA config)", fontsize=16, fontweight='bold')
 
-    plt.tight_layout()
-    fig.savefig(FIGS / "layer_by_layer_acc.png", dpi=150, bbox_inches="tight")
-    fig.savefig(FIGS / "layer_by_layer_acc.pdf", bbox_inches="tight")
-    print(f"Saved {FIGS / 'layer_by_layer_acc.png'}")
-
-    # ── Layer-by-layer: base models only ─────────────────────────────────
-    base_df = ema_df[~ema_df["source"].str.contains("Instruct")].copy()
-    if len(base_df) > 0:
-        fig_b, axes_b = plt.subplots(1, 3, figsize=(18, 6))
-        fig_b.suptitle("Probe Accuracy by Layer — Base Models Only (EMA Linear)", fontsize=16, fontweight='bold')
-
-        for ax, task in zip(axes_b, tasks):
+        for ax, task in zip(axes, ["age_bin", "gender", "star_sign"]):
             ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
             ax.set_xlabel("Relative Layer Depth"); ax.set_ylabel("Balanced Accuracy")
             ax.grid(True, alpha=0.3)
-            chance = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
-            ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
+            ax.axhline(CHANCE[task], color='white', linestyle=':', alpha=0.4)
 
-            tdf = base_df[base_df["task"] == task]
-            for model_short in sorted(tdf["short"].unique()):
-                mdf = tdf[tdf["short"] == model_short].sort_values("layer_frac")
-                sk = get_size_key(model_short)
-                ax.plot(mdf["layer_frac"], mdf["text_balanced_acc"],
-                        marker="o", markersize=5, linewidth=2,
-                        color=SIZE_COLORS.get(sk, "#999"),
-                        label=model_short)
+            tdf = best_per_layer[best_per_layer["task"] == task]
+            for _, grp in tdf.groupby("model_name"):
+                row = grp.iloc[0]
+                color = FAMILY_COLORS.get(row["family"], "#999")
+                alpha = 0.4 + 0.6 * min(row["size_B"] / 14, 1)  # bigger = more opaque
+                grp_sorted = grp.sort_values("layer_frac")
+                ax.plot(grp_sorted["layer_frac"], grp_sorted["text_balanced_acc"],
+                        marker="o", markersize=3, linewidth=1.5,
+                        color=color, alpha=alpha,
+                        label=f"{row['family']} {row['short']}")
 
-            ax.legend(fontsize=9, loc="best", facecolor='#1a1a2e', edgecolor='#444')
-
-        plt.tight_layout()
-        fig_b.savefig(FIGS / "layer_by_layer_base_only.png", dpi=150, bbox_inches="tight")
-        fig_b.savefig(FIGS / "layer_by_layer_base_only.pdf", bbox_inches="tight")
-        print(f"Saved {FIGS / 'layer_by_layer_base_only.png'}")
-
-    # ── Layer-by-layer: chat template models only ────────────────────────
-    chat_df = ema_df[ema_df["source"].str.contains("chat", case=False)].copy()
-    if len(chat_df) > 0:
-        fig_c, axes_c = plt.subplots(1, 3, figsize=(18, 6))
-        fig_c.suptitle("Probe Accuracy by Layer — Chat Template (EMA Linear)", fontsize=16, fontweight='bold')
-
-        for ax, task in zip(axes_c, tasks):
-            ax.set_title(task.replace("_", " ").title(), fontsize=14, color=TASK_COLORS[task])
-            ax.set_xlabel("Relative Layer Depth"); ax.set_ylabel("Balanced Accuracy")
-            ax.grid(True, alpha=0.3)
-            chance = {"age_bin": 1/3, "gender": 0.5, "star_sign": 1/12}
-            ax.axhline(chance[task], color='white', linestyle=':', alpha=0.4)
-
-            tdf = chat_df[chat_df["task"] == task]
-            for model_short in sorted(tdf["short"].unique()):
-                mdf = tdf[tdf["short"] == model_short].sort_values("layer_frac")
-                sk = get_size_key(model_short)
-                ax.plot(mdf["layer_frac"], mdf["text_balanced_acc"],
-                        marker="o", markersize=5, linewidth=2,
-                        color=SIZE_COLORS.get(sk, "#999"),
-                        label=model_short)
-
-            ax.legend(fontsize=9, loc="best", facecolor='#1a1a2e', edgecolor='#444')
+            ax.legend(fontsize=6, loc="best", facecolor='#1a1a2e', edgecolor='#444', ncol=2)
 
         plt.tight_layout()
-        fig_c.savefig(FIGS / "layer_by_layer_chat.png", dpi=150, bbox_inches="tight")
-        fig_c.savefig(FIGS / "layer_by_layer_chat.pdf", bbox_inches="tight")
-        print(f"Saved {FIGS / 'layer_by_layer_chat.png'}")
+        fig.savefig(FIGS / "layer_by_layer_acc.png", dpi=150, bbox_inches="tight")
+        fig.savefig(FIGS / "layer_by_layer_acc.pdf", bbox_inches="tight")
+        print(f"Saved {FIGS / 'layer_by_layer_acc.png'}")
+        plt.close('all')
+
+print("\nDone.")

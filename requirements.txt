@@ -1,0 +1,11 @@
+# torch is installed separately in setup.sh (needs CUDA-specific wheel)
+transformers>=4.51
+huggingface_hub
+safetensors
+pandas
+numpy
+scikit-learn
+scipy
+matplotlib
+tqdm
+pyarrow

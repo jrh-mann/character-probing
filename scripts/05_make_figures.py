@@ -2,9 +2,9 @@
 """
 05_make_figures.py — Generate all research figures from probe results.
 
-Reads per-layer CSVs from /workspace/characterprobing/results/*.csv and produces
+Reads per-layer CSVs from results/*.csv and produces
 five publication-quality figures saved as both PNG and PDF in
-/workspace/characterprobing/figures/.
+figures/.
 
 Usage:
     python 05_make_figures.py
@@ -28,8 +28,9 @@ from scipy.interpolate import RegularGridInterpolator
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-RESULTS_DIR = Path("/workspace/characterprobing/results")
-FIGURES_DIR = Path("/root/characterprobing/figures")
+BASE_DIR = Path(__file__).resolve().parent.parent
+RESULTS_DIR = BASE_DIR / "results"
+FIGURES_DIR = BASE_DIR / "figures"
 FIGURES_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------

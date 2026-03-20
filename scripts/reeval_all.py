@@ -2,9 +2,10 @@
 """Re-evaluate all completed models with corrected per-token eval."""
 import subprocess, sys, os, time, pathlib
 
-os.environ["HF_HOME"] = "/workspace/hf_cache"
-SCRIPT = "/workspace/characterprobing/scripts/04_reeval.py"
-PROBE_DIR = pathlib.Path("/workspace/characterprobing/probes")
+BASE_DIR = pathlib.Path(__file__).resolve().parent.parent
+os.environ.setdefault("HF_HOME", str(BASE_DIR / "hf_cache"))
+SCRIPT = str(BASE_DIR / "scripts" / "04_reeval.py")
+PROBE_DIR = BASE_DIR / "probes"
 
 # Discover all saved probe directories
 RUNS = []
@@ -17,7 +18,7 @@ for d in sorted(PROBE_DIR.iterdir()):
     RUNS.append((model_id, is_chat, name))
 
 for model_id, is_chat, short_name in RUNS:
-    result_file = pathlib.Path(f"/workspace/characterprobing/results/{short_name}_reeval_results.csv")
+    result_file = BASE_DIR / "results" / f"{short_name}_reeval_results.csv"
     if result_file.exists():
         print(f"SKIP {short_name} (reeval results exist)", flush=True)
         continue

@@ -17,7 +17,7 @@ Usage:
   python 05_attention_probe.py --model_name Qwen/Qwen2.5-0.5B
 """
 
-import argparse, gc, time
+import argparse, gc, os, sys, time
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +28,10 @@ from sklearn.metrics import balanced_accuracy_score, f1_score
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+os.environ.setdefault("HF_HOME", str(BASE_DIR / "hf_cache"))
+NUM_WORKERS = min(8, os.cpu_count() or 1)
 
 MAX_SEQ_LEN = 1024
 SEED = 42
@@ -160,8 +164,8 @@ def main():
     pa.add_argument("--epochs", type=int, default=3)
     pa.add_argument("--lr", type=float, default=1e-4)
     pa.add_argument("--wd", type=float, default=1e-5)
-    pa.add_argument("--output_dir", default="/workspace/characterprobing/results/")
-    pa.add_argument("--data_path", default="/workspace/characterprobing/data/processed/blog_corpus.parquet")
+    pa.add_argument("--output_dir", default=str(BASE_DIR / "results"))
+    pa.add_argument("--data_path", default=str(BASE_DIR / "data" / "processed" / "blog_corpus.parquet"))
     pa.add_argument("--seed", type=int, default=SEED)
     pa.add_argument("--chat_template", action="store_true")
     args = pa.parse_args()
@@ -170,16 +174,19 @@ def main():
     ms = short(args.model_name)
     if args.chat_template: ms += "_chat"
     od = Path(args.output_dir); od.mkdir(parents=True, exist_ok=True)
-    probe_dir = Path("/workspace/characterprobing/probes") / ms
+    probe_dir = BASE_DIR / "probes" / ms
     probe_dir.mkdir(parents=True, exist_ok=True)
+
+    if not Path(args.data_path).exists():
+        sys.exit(f"ERROR: Data not found at {args.data_path}. Run 01_preprocess_data.py first.")
 
     # Load model
     tok = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     tok.padding_side = "right"
     if tok.pad_token is None: tok.pad_token = tok.eos_token
 
-    print(f"Loading {args.model_name} fp16 ...")
-    model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype=torch.float16,
+    print(f"Loading {args.model_name} bf16 ...")
+    model = AutoModelForCausalLM.from_pretrained(args.model_name, torch_dtype=torch.bfloat16,
                                                   device_map="auto", trust_remote_code=True)
     model.eval()
     hdim = model.config.hidden_size
@@ -196,9 +203,9 @@ def main():
         tst = Subset(tst, torch.randperm(len(tst))[:args.max_test_texts].tolist())
     print(f"  train={len(trn)}, test={len(tst)}")
 
-    tl = DataLoader(trn, batch_size=bs, shuffle=True, num_workers=8, pin_memory=True,
+    tl = DataLoader(trn, batch_size=bs, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True,
                     collate_fn=col, persistent_workers=True)
-    el = DataLoader(tst, batch_size=bs, shuffle=False, num_workers=8, pin_memory=True,
+    el = DataLoader(tst, batch_size=bs, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True,
                     collate_fn=col, persistent_workers=True)
 
     dev = "cuda"

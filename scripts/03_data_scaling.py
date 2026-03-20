@@ -8,15 +8,17 @@ diminishing returns. Uses a single model (default 0.5B) for speed.
 
 import subprocess
 import sys
+import os
 import time
 import pandas as pd
 from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL = "Qwen/Qwen2.5-0.5B"
 SIZES = [500, 1000, 2000, 5000, 10000, 15000, 20000, 50000]
 TEST_SIZE = 10000
-SCRIPT = "/workspace/characterprobing/scripts/02_run_probes.py"
-OUTPUT_DIR = "/workspace/characterprobing/results/data_scaling"
+SCRIPT = str(BASE_DIR / "scripts" / "02_run_probes.py")
+OUTPUT_DIR = str(BASE_DIR / "results" / "data_scaling")
 
 Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -32,11 +34,10 @@ for n_train in SIZES:
          "--model_name", MODEL,
          "--max_train_texts", str(n_train),
          "--max_test_texts", str(TEST_SIZE),
-         "--save_layer_stride", "0",  # don't save acts for scaling experiment
          "--output_dir", OUTPUT_DIR,
          "--seed", "42"],
         capture_output=True, text=True,
-        env={**__import__('os').environ, "HF_HOME": "/workspace/hf_cache"}
+        env={**os.environ, "HF_HOME": str(BASE_DIR / "hf_cache")}
     )
     elapsed = time.time() - t0
 
