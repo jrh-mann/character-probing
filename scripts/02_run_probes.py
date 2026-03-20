@@ -120,10 +120,8 @@ class EMAProbe:
         self._ustats(x)
         xn = (x - self.rmean) / (self.rvar.sqrt() + 1e-8)
         lo = xn @ self.W.T + self.b
-        loss = F.cross_entropy(lo, y).item()
-        batch_c = (lo.argmax(-1) == y).sum().item()
-        batch_n = y.shape[0]
-        self.tot_c += batch_c; self.tot_n += batch_n
+        loss = F.cross_entropy(lo, y)
+        acc = (lo.argmax(-1) == y).float().mean()
         p = torch.softmax(lo, -1)
         oh = torch.zeros_like(p).scatter_(1, y.unsqueeze(1), 1.0)
         gl = (p - oh) / xn.shape[0]
@@ -132,7 +130,7 @@ class EMAProbe:
         self.W_ema.mul_(self.decay).add_(self.W, alpha=1-self.decay)
         self.b_ema.mul_(self.decay).add_(self.b, alpha=1-self.decay)
         self.step += 1
-        return loss, batch_c / max(batch_n, 1)
+        return loss, acc
 
     @torch.no_grad()
     def predict(self, x):
@@ -255,8 +253,8 @@ class MLPProbe(torch.nn.Module):
         loss.backward()
         self.opt.step()
         with torch.no_grad():
-            batch_acc = (lo.argmax(-1) == y).float().mean().item()
-        return loss.item(), batch_acc
+            acc = (lo.argmax(-1) == y).float().mean()
+        return loss.detach(), acc
 
     @torch.no_grad()
     def predict(self, x):
@@ -361,15 +359,8 @@ class CrossLayerGram:
 
 def all_real_positions(amask):
     """Return (batch_indices, token_indices, text_ids) for ALL non-pad tokens."""
-    B, S = amask.shape; dev = amask.device; ab, at = [], []
-    for b in range(B):
-        r = amask[b].nonzero(as_tuple=False).squeeze(-1)
-        if r.shape[0] == 0: continue
-        ab.append(torch.full((r.shape[0],), b, device=dev, dtype=torch.long))
-        at.append(r)
-    if not ab:
-        e = torch.zeros(0, dtype=torch.long, device=dev); return e, e, e
-    return torch.cat(ab), torch.cat(at), torch.cat(ab)
+    bi, ti = torch.where(amask)
+    return bi, ti, bi
 
 def eval_layers_list(nl, stride=4):
     ls = list(range(0, nl+1, stride))
@@ -463,46 +454,40 @@ class ActivationCapture:
 def _process_batch(capture, elvs, bi, ti, tlabs, ema, mm, ridges, cross_gram,
                     bn, dev, ema_configs, shuffled_ema=None, mlps=None):
     """Process one batch through all probes. Returns list of log rows (long format)."""
-    log_rows = []
+    # Accumulate (loss_tensor, acc_tensor) pairs, convert to Python at the end
+    pending = []  # [(config_name, lr, wd, layer, task, loss_tensor, acc_tensor)]
     n_tokens = bi.shape[0]
     layer_acts = {}
     for l in elvs:
         a = capture.captured[l][bi, ti].float()
         layer_acts[l] = a
         for t in TASKS:
-            # Update all EMA configs on the same activations (real labels)
             for ci, cfg in enumerate(ema_configs):
-                loss, batch_acc = ema[(l,t,ci)].update(a, tlabs[t])
-                log_rows.append({
-                    "batch": bn, "layer": l, "task": t,
-                    "config": cfg["name"], "lr": cfg["lr"], "wd": cfg["wd"],
-                    "loss": round(loss, 5), "batch_acc": round(batch_acc, 5),
-                    "n_tokens": n_tokens,
-                })
-            # MLP probes (nonlinear, multiple hidden sizes)
+                loss, acc = ema[(l,t,ci)].update(a, tlabs[t])
+                pending.append((cfg["name"], cfg["lr"], cfg["wd"], l, t, loss, acc))
             if mlps is not None:
                 for h in MLP_HIDDEN_SIZES:
                     loss_m, acc_m = mlps[(l,t,h)].update(a, tlabs[t])
-                    log_rows.append({
-                        "batch": bn, "layer": l, "task": t,
-                        "config": f"mlp_h{h}", "lr": 1e-3, "wd": 0,
-                        "loss": round(loss_m, 5), "batch_acc": round(acc_m, 5),
-                        "n_tokens": n_tokens,
-                    })
-            # Shuffled-label control probes (same activations, permuted labels)
+                    pending.append((f"mlp_h{h}", 1e-3, 0, l, t, loss_m, acc_m))
             if shuffled_ema is not None:
                 perm = torch.randperm(a.shape[0], device=dev)
                 shuffled_y = tlabs[t][perm]
                 loss_s, acc_s = shuffled_ema[(l,t)].update(a, shuffled_y)
-                log_rows.append({
-                    "batch": bn, "layer": l, "task": t,
-                    "config": "shuffled", "lr": 0.01, "wd": 1e-4,
-                    "loss": round(loss_s, 5), "batch_acc": round(acc_s, 5),
-                    "n_tokens": n_tokens,
-                })
+                pending.append(("shuffled", 0.01, 1e-4, l, t, loss_s, acc_s))
             mm[(l,t)].update(a, tlabs[t])
         ridges[l].update(a, tlabs)
     cross_gram.update(layer_acts)
+
+    # Single sync point: convert all tensors to Python floats
+    torch.cuda.synchronize()
+    log_rows = []
+    for cfg_name, lr, wd, l, t, loss_t, acc_t in pending:
+        log_rows.append({
+            "batch": bn, "layer": l, "task": t,
+            "config": cfg_name, "lr": lr, "wd": wd,
+            "loss": round(loss_t.item(), 5), "batch_acc": round(acc_t.item(), 5),
+            "n_tokens": n_tokens,
+        })
     return log_rows
 
 
