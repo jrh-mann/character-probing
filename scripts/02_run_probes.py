@@ -827,14 +827,20 @@ def main():
     col = make_collate(tok, chat_template=args.chat_template)
     if args.chat_template:
         print("  Using chat template for tokenization")
-    trn = BlogDS(args.data_path, "train"); tst = BlogDS(args.data_path, "test")
+    trn = BlogDS(args.data_path, "train")
+    val = BlogDS(args.data_path, "val")
+    tst = BlogDS(args.data_path, "test")
     if args.max_train_texts > 0 and len(trn) > args.max_train_texts:
         trn = Subset(trn, torch.randperm(len(trn))[:args.max_train_texts].tolist())
     if args.max_test_texts > 0 and len(tst) > args.max_test_texts:
         tst = Subset(tst, torch.randperm(len(tst))[:args.max_test_texts].tolist())
-    print(f"  train={len(trn)}, test={len(tst)}")
+    if args.max_test_texts > 0 and len(val) > args.max_test_texts:
+        val = Subset(val, torch.randperm(len(val))[:args.max_test_texts].tolist())
+    print(f"  train={len(trn)}, val={len(val)}, test={len(tst)}")
 
     tl = DataLoader(trn, batch_size=bs, shuffle=True, num_workers=NUM_WORKERS, pin_memory=True,
+                    collate_fn=col, persistent_workers=True)
+    vl = DataLoader(val, batch_size=bs, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True,
                     collate_fn=col, persistent_workers=True)
     el = DataLoader(tst, batch_size=bs, shuffle=False, num_workers=NUM_WORKERS, pin_memory=True,
                     collate_fn=col, persistent_workers=True)
@@ -893,13 +899,43 @@ def main():
         print(f"  {t}: done")
     del cross_gram
 
-    # EVALUATE
+    # VAL EVAL — select best ridge/multi lambda per (layer, task)
+    print(f"\n{'='*60}\nVALIDATION — {len(val)} texts (hyperparameter selection)\n{'='*60}")
+    t0 = time.time()
+    vdf = evaluate(model, vl, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl,
+                   ema_configs=ema_configs, shuffled_ema=shuffled_ema, mlps=mlps,
+                   attn_probes=attn_probes)
+    vt = time.time() - t0; print(f"Validation: {vt:.1f}s")
+    vdf.insert(0, "model_name", args.model_name)
+    vdf.to_csv(od / f"{ms}_val_results.csv", index=False)
+
+    # Pick best ridge lambda per (layer, task) on val
+    best_ridge_lambda = {}
+    for l in elvs:
+        for t in TASKS:
+            ridge_rows = vdf[(vdf["task"] == t) & (vdf["strategy"].str.startswith("ridge_")) &
+                             (vdf["layer"] == str(l))]
+            if len(ridge_rows) > 0:
+                best_row = ridge_rows.loc[ridge_rows["text_balanced_acc"].idxmax()]
+                best_ridge_lambda[(l, t)] = best_row["strategy"]
+    print(f"  Val-selected ridge lambdas: {len(best_ridge_lambda)} (layer, task) pairs")
+
+    # TEST EVAL
     print(f"\n{'='*60}\nEVALUATION — {len(tst)} texts\n{'='*60}")
     t0 = time.time()
     rdf = evaluate(model, el, ema, mm, ridge_sols, multi_sols, elvs, multi_layers, nl,
                    ema_configs=ema_configs, shuffled_ema=shuffled_ema, mlps=mlps,
                    attn_probes=attn_probes)
     et = time.time() - t0; print(f"Evaluation: {et:.1f}s")
+
+    # Mark val-selected ridge entries
+    rdf["val_selected"] = False
+    for (l, t), strat in best_ridge_lambda.items():
+        mask = (rdf["strategy"] == strat) & (rdf["layer"] == str(l)) & (rdf["task"] == t)
+        rdf.loc[mask, "val_selected"] = True
+    # Non-ridge strategies are always "selected" (no hyperparameter to choose)
+    non_ridge = ~rdf["strategy"].str.startswith("ridge_") & ~rdf["strategy"].str.startswith("multi_")
+    rdf.loc[non_ridge, "val_selected"] = True
 
     rdf.insert(0, "model_name", args.model_name)
     rdf.to_csv(od / f"{ms}_per_layer_results.csv", index=False)
