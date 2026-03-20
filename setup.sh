@@ -77,7 +77,7 @@ else
         echo "    and extract to $RAW_DIR"
         exit 1
     fi
-    unzip -q blogs.zip -d blogs_tmp/
+    unzip -qo blogs.zip -d blogs_tmp/
     rm blogs.zip
     mkdir -p blogs
     find blogs_tmp -name '*.xml' -exec mv {} blogs/ \;
