@@ -170,29 +170,25 @@ class Ridge:
             self.class_counts[t] += oh.sum(0)
 
     def solve(self, lam=1.0, task="age_bin"):
-        """Returns (W_z, bias, mean, std) — weights in z-scored space. All on CPU."""
+        """Returns (W_z, bias, mean, std) — weights in z-scored space. Solved on GPU float32."""
         n = max(self.n, 1)
-        sx = self.sx.cpu().double(); sx2 = self.sx2.cpu().double()
-        A = self.A.cpu().double(); Bt = self.B[task].cpu().double()
-        cc = self.class_counts[task].cpu().double()  # actual class counts
+        sx = self.sx.float(); sx2 = self.sx2.float()
+        A = self.A.float(); Bt = self.B[task].float()
+        cc = self.class_counts[task].float()
 
         mean = sx / n
         var = (sx2 / n - mean**2).clamp(min=1e-8); std = var.sqrt(); inv = 1.0/std
 
-        # Center and z-score the Gram matrix
         A_c = A - n * mean.unsqueeze(1) @ mean.unsqueeze(0)
         A_z = A_c * inv.unsqueeze(1) * inv.unsqueeze(0)
 
-        # Center the cross-covariance: B_c = X^T Y - n * mean_x @ mean_y^T
-        mean_y = cc / n  # class proportions (sums to 1)
+        mean_y = cc / n
         B_c = Bt - n * mean.unsqueeze(1) @ mean_y.unsqueeze(0)
         B_z = B_c * inv.unsqueeze(1)
 
-        # Normalize by n so lambda is on a sensible scale
-        # Solve: (A_z/n + lam * I) W = B_z/n
-        W_z = torch.linalg.solve(A_z / n + lam * torch.eye(self.D, dtype=torch.float64), B_z / n)
+        W_z = torch.linalg.solve(A_z / n + lam * torch.eye(self.D, device=self.dev), B_z / n)
         bias = mean_y
-        return W_z.float(), bias.float(), mean.float(), std.float()
+        return W_z, bias, mean, std
 
     def state_dict(self):
         d = {"A": self.A.cpu(), "sx": self.sx.cpu(), "sx2": self.sx2.cpu(), "n": self.n}
