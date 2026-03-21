@@ -404,7 +404,8 @@ def auto_bs(model):
     if vram_gb >= 75:  # A100-80GB
         if n < 1:    bs = 256
         elif n < 2:  bs = 256
-        elif n < 5:  bs = 256
+        elif n < 3:  bs = 256
+        elif n < 5:  bs = 128
         elif n < 10: bs = 128
         elif n < 15: bs = 64
         else:        bs = 32
@@ -618,7 +619,11 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda",
 
     capture.remove()
     if oom_count > 0:
-        print(f"  Total OOM skips: {oom_count}/{bn+1} batches ({oom_count/(bn+1)*100:.1f}%)")
+        oom_pct = oom_count / max(oom_count + global_bn, 1) * 100
+        print(f"  Total OOM skips: {oom_count}/{oom_count + global_bn} batches ({oom_pct:.1f}%)")
+        if oom_pct > 50:
+            print(f"  FATAL: >50% batches OOM'd. Results would be garbage. Aborting.")
+            sys.exit(1)
     print(f"  Completed {global_bn} batches")
     return ema, shuffled_ema, mlps, attn_probes, mm, ridges, cross_gram, multi_layers, pd.DataFrame(all_log_rows), ema_configs
 
