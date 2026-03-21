@@ -427,6 +427,14 @@ def auto_bs(model):
 
 def short(s): return s.rstrip("/").split("/")[-1]
 
+def get_inner_model(model):
+    """Get the inner transformer model (without lm_head) for forward passes.
+    Handles Gemma 3 multimodal (model.model.language_model) and standard (model.model)."""
+    inner = model.model
+    if hasattr(inner, 'language_model'):
+        return inner.language_model
+    return inner
+
 
 # ── Hook-based activation capture ───────────────────────────────────────
 
@@ -446,7 +454,10 @@ class ActivationCapture:
         self.hooks = []
         self.eval_layers = eval_layers
 
-        inner = model.model  # Qwen2Model (no lm_head)
+        # Find the inner transformer: model.model for most, model.model.language_model for Gemma 3
+        inner = model.model
+        if hasattr(inner, 'language_model'):
+            inner = inner.language_model
 
         for l in eval_layers:
             if l == 0:
@@ -589,7 +600,7 @@ def train(model, loader, nl, hdim, tpt, elvs, epochs=1, dev="cuda",
             try:
                 capture.clear()
                 with torch.no_grad():
-                    model.model(input_ids=ids, attention_mask=amask)
+                    get_inner_model(model)(input_ids=ids, attention_mask=amask)
 
                 bi, ti, txid = all_real_positions(amask)
                 if bi.shape[0] == 0:
@@ -824,7 +835,11 @@ def main():
                                                   device_map="auto", trust_remote_code=True)
     model.eval()
     # torch.compile disabled — causes recompilation with variable-length inputs + hooks
-    hdim = model.config.hidden_size; nl = model.config.num_hidden_layers
+    # Handle models with nested text configs (e.g., Gemma 3 multimodal)
+    cfg = model.config
+    if hasattr(cfg, 'text_config'):
+        cfg = cfg.text_config
+    hdim = cfg.hidden_size; nl = cfg.num_hidden_layers
     elvs = eval_layers_list(nl, args.eval_layer_stride)
     bs = args.batch_size if args.batch_size > 0 else auto_bs(model)
     print(f"  hdim={hdim}, layers={nl}, bs={bs}, eval_layers={elvs}")
