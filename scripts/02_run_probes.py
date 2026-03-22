@@ -681,7 +681,7 @@ def evaluate(model, loader, ema, mm, ridge_sols, multi_sols, elvs, multi_layers,
         try:
             capture.clear()
             with torch.no_grad():
-                model.model(input_ids=ids, attention_mask=amask)
+                get_inner_model(model)(input_ids=ids, attention_mask=amask)
         except torch.cuda.OutOfMemoryError:
             capture.clear(); torch.cuda.empty_cache(); gc.collect(); continue
 
