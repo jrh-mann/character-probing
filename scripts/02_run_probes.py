@@ -68,9 +68,9 @@ class BlogDS(Dataset):
         df = pd.read_parquet(path)
         df = df[df["split"] == split].reset_index(drop=True)
         self.texts = df["text"].tolist()
-        self.y_age = torch.tensor(df["age_bin"].map(AGE_BIN_MAP).values, dtype=torch.long)
-        self.y_gen = torch.tensor(df["gender"].map(GENDER_MAP).values, dtype=torch.long)
-        self.y_star = torch.tensor(df["star_sign"].map(STAR_SIGN_MAP).values, dtype=torch.long)
+        self.y_age = torch.tensor(df["age_bin"].map(AGE_BIN_MAP).fillna(0).astype(int).values, dtype=torch.long)
+        self.y_gen = torch.tensor(df["gender"].map(GENDER_MAP).fillna(0).astype(int).values, dtype=torch.long)
+        self.y_star = torch.tensor(df["star_sign"].map(STAR_SIGN_MAP).fillna(0).astype(int).values, dtype=torch.long)
     def __len__(self): return len(self.texts)
     def __getitem__(self, i): return self.texts[i], self.y_age[i], self.y_gen[i], self.y_star[i]
 
