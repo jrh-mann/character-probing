@@ -427,13 +427,20 @@ def auto_bs(model):
 
 def short(s): return s.rstrip("/").split("/")[-1]
 
-def get_inner_model(model):
-    """Get the inner transformer model (without lm_head) for forward passes.
-    Handles Gemma 3 multimodal (model.model.language_model) and standard (model.model)."""
+def _get_transformer_backbone(model):
+    """Get the inner transformer backbone (embed + layers + norm, no lm_head).
+    Handles: Qwen/Llama (model.model), Gemma 3 (model.model.language_model),
+    GPT-NeoX/Pythia (model.gpt_neox)."""
+    if hasattr(model, 'gpt_neox'):
+        return model.gpt_neox
     inner = model.model
     if hasattr(inner, 'language_model'):
         return inner.language_model
     return inner
+
+def get_inner_model(model):
+    """Get the callable inner model for forward passes."""
+    return _get_transformer_backbone(model)
 
 
 # ── Hook-based activation capture ───────────────────────────────────────
@@ -454,22 +461,20 @@ class ActivationCapture:
         self.hooks = []
         self.eval_layers = eval_layers
 
-        # Find the inner transformer: model.model for most, model.model.language_model for Gemma 3
-        inner = model.model
-        if hasattr(inner, 'language_model'):
-            inner = inner.language_model
+        inner = _get_transformer_backbone(model)
+
+        # Detect attribute names (GPT-NeoX uses different names)
+        embed = getattr(inner, 'embed_tokens', None) or getattr(inner, 'embed_in', None)
+        norm = getattr(inner, 'norm', None) or getattr(inner, 'final_layer_norm', None)
+        layers = inner.layers
 
         for l in eval_layers:
             if l == 0:
-                # Embedding output
-                h = inner.embed_tokens.register_forward_hook(self._make_hook(0))
+                h = embed.register_forward_hook(self._make_hook(0))
             elif l == n_layers:
-                # After final norm
-                h = inner.norm.register_forward_hook(self._make_hook(l))
+                h = norm.register_forward_hook(self._make_hook(l))
             else:
-                # Transformer layer l-1 output (layers are 0-indexed, but our layer l
-                # corresponds to the output AFTER transformer block l-1)
-                h = inner.layers[l - 1].register_forward_hook(self._make_hook(l))
+                h = layers[l - 1].register_forward_hook(self._make_hook(l))
             self.hooks.append(h)
 
     def _make_hook(self, layer_idx):
