@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Comprehensive runner: fills gaps, runs bigger models, classifier, position accuracy.
 
-Usage: python scripts/run_everything.py [--skip-gaps] [--skip-classifier] [--skip-position]
+Usage: python scripts/run.py [--skip-gaps] [--skip-classifier] [--skip-position]
 
 Designed for A40 (46GB). Loads one model at a time, runs all needed experiments,
 then clears cache before loading the next.
@@ -14,8 +14,8 @@ os.environ.setdefault("HF_TOKEN", "")
 
 BASE = Path(__file__).resolve().parent.parent
 SCRIPT = str(BASE / "scripts" / "02_run_probes.py")
-POS_SCRIPT = str(BASE / "scripts" / "position_accuracy.py")
-CLS_SCRIPT = str(BASE / "scripts" / "train_classifier.py")
+POS_SCRIPT = str(BASE / "scripts" / "05_position_accuracy.py")
+CLS_SCRIPT = str(BASE / "scripts" / "06_train_classifier.py")
 BLOG_DATA = str(BASE / "data" / "processed" / "blog_corpus.parquet")
 
 DATASETS = {

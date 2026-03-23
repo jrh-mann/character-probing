@@ -132,11 +132,42 @@ def prep_prism():
     save_dataset(hdf, "prism")
 
 
+def prep_synthpai():
+    print("\n=== SynthPAI ===")
+    from datasets import load_dataset
+    from sklearn.model_selection import train_test_split
+    ds = load_dataset("RobinSta/SynthPAI", split="train")
+    rows = []
+    for item in ds:
+        text = item["text"]
+        if not text or len(text.strip()) < 20:
+            continue
+        profile = item["profile"]
+        age = profile.get("age")
+        sex = profile.get("sex")
+        if age is None or sex is None:
+            continue
+        ab = 1 if age <= 30 else (2 if age <= 50 else 3)
+        rows.append({"text": text, "blogger_id": item.get("author", "unknown"),
+                     "age_bin": ab, "gender": sex, "star_sign": "Unknown",
+                     "n_tokens": len(text.split())})
+    hdf = pd.DataFrame(rows)
+    authors = hdf["blogger_id"].unique()
+    tr, temp = train_test_split(authors, test_size=0.30, random_state=42)
+    va, te = train_test_split(temp, test_size=0.50, random_state=42)
+    sm = {a: "train" for a in tr}
+    sm.update({a: "val" for a in va})
+    sm.update({a: "test" for a in te})
+    hdf["split"] = hdf["blogger_id"].map(sm)
+    save_dataset(hdf, "synthpai_corpus")
+
+
 if __name__ == "__main__":
     prep_hippocorpus()
     prep_ellipse()
     prep_europarl()
     prep_prism()
+    prep_synthpai()
     print("\n=== ALL DATASETS READY ===")
     for f in sorted(PROC.glob("*.parquet")):
         df = pd.read_parquet(f)

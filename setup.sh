@@ -128,20 +128,18 @@ echo "    tail -f results/logs/overnight.log  # live output"
 echo "    ls figures/                    # live-updating graphs"
 echo ""
 
-# Start background monitor (regenerates status.txt + figures every 60s)
-bash "$REPO_DIR/scripts/monitor.sh" &
-MONITOR_PID=$!
-trap "kill $MONITOR_PID 2>/dev/null || true" EXIT
+# Preprocess other datasets (Hippocorpus, ELLIPSE, Europarl, PRISM, SynthPAI)
+echo "  Preprocessing other datasets..."
+python3 "$REPO_DIR/scripts/01b_preprocess_other_datasets.py" 2>&1 | tail -5
+echo "  Done ✓"
 
 # Run all experiments — output goes to terminal AND log file
-python3 "$REPO_DIR/scripts/overnight.py" 2>&1 | tee "$REPO_DIR/results/logs/overnight.log"
+python3 "$REPO_DIR/scripts/run.py" 2>&1 | tee "$REPO_DIR/results/logs/run.log"
 
 # ── 6. Final figures ─────────────────────────────────────────────────
 echo ""
 echo "━━━ [6/6] Generating final figures ━━━"
-python3 "$REPO_DIR/scripts/05_make_figures.py" 2>&1 && echo "  Publication figures ✓" || echo "  ⚠ Figure generation failed (non-fatal)"
-python3 "$REPO_DIR/scripts/plot_position_accuracy.py" 2>&1 && echo "  Position accuracy plots ✓" || echo "  ⚠ Position plots failed (non-fatal)"
-python3 "$REPO_DIR/scripts/plot_live.py" 2>&1 && echo "  Scaling curves ✓" || echo "  ⚠ Scaling curves failed (non-fatal)"
+python3 "$REPO_DIR/scripts/03_make_figures.py" 2>&1 && echo "  Publication figures ✓" || echo "  ⚠ Figure generation failed (non-fatal)"
 
 # ── Done ──────────────────────────────────────────────────────────────
 echo ""
