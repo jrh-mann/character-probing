@@ -50,11 +50,11 @@ ALL_MODELS = [
     ("google/gemma-3-270m",    64),
     ("google/gemma-3-1b-pt",   32),
     ("google/gemma-3-4b-pt",   16),
-    ("google/gemma-3-12b-pt",   4),
+    ("google/gemma-3-12b-pt",  16),
     # Llama 3
     ("meta-llama/Llama-3.2-1B", 32),
     ("meta-llama/Llama-3.2-3B", 16),
-    ("meta-llama/Llama-3.1-8B",  8),
+    ("meta-llama/Llama-3.1-8B", 16),
 ]
 
 
