@@ -121,8 +121,7 @@ def run_position(model, batch_size):
            "--model_name", model,
            "--data_path", BLOG_DATA,
            "--output_dir", str(BASE / "results"),
-           "--batch_size", str(batch_size),
-           "--max_train_texts", "20000"]
+           "--batch_size", str(batch_size)]
 
     log_dir = BASE / "results" / "logs"
     os.makedirs(log_dir, exist_ok=True)
