@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """Evaluate probe accuracy as a function of position in text.
 
-Self-contained: trains Ridge probe from scratch, then evaluates position accuracy.
-No need to upload saved probes — just needs model + data.
+Loads saved Ridge probes (trained on blog corpus), runs ONE forward pass
+on the test set, and computes cumulative accuracy at position thresholds.
 
-Pass 1: Forward pass on training data → accumulate Ridge Gram matrices
-Pass 2: Forward pass on test data → compute cumulative accuracy at position bins
+No training — just loads probes and evaluates.
 
-Output: {model_short}_position_accuracy.csv with columns:
-  model_name, task, layer, position_pct, accuracy, n_texts
+Output: {model_short}_position_accuracy.csv
 """
 
 import argparse, gc, os, sys, time
@@ -58,16 +56,13 @@ def short(s): return s.rstrip("/").split("/")[-1]
 
 
 def _get_transformer_backbone(model):
-    if hasattr(model, 'gpt_neox'):
-        return model.gpt_neox
+    if hasattr(model, 'gpt_neox'): return model.gpt_neox
     inner = model.model
-    if hasattr(inner, 'language_model'):
-        return inner.language_model
+    if hasattr(inner, 'language_model'): return inner.language_model
     return inner
 
 
-def get_inner_model(model):
-    return _get_transformer_backbone(model)
+def get_inner_model(model): return _get_transformer_backbone(model)
 
 
 def eval_layers_list(nl, stride=4):
@@ -79,13 +74,9 @@ def eval_layers_list(nl, stride=4):
 def auto_bs(model):
     n = sum(p.numel() for p in model.parameters()) / 1e9
     vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 24
-    if vram_gb >= 75:
-        bs = 256 if n < 5 else (128 if n < 15 else 32)
-    elif vram_gb >= 38:
-        bs = 128 if n < 2 else (64 if n < 5 else (32 if n < 10 else 16))
-    else:
-        bs = 64 if n < 2 else (32 if n < 5 else (16 if n < 10 else 8))
-    return bs
+    if vram_gb >= 38:
+        return 128 if n < 2 else (64 if n < 5 else (32 if n < 10 else 16))
+    return 64 if n < 2 else (32 if n < 5 else (16 if n < 10 else 8))
 
 
 class ActivationCapture:
@@ -116,47 +107,38 @@ class ActivationCapture:
         self.hooks.clear()
 
 
-class Ridge:
-    """Incremental Gram matrix on GPU. Solve post-hoc in float64."""
-    def __init__(self, D, dev="cuda"):
-        self.D, self.dev = D, dev
-        self.A = torch.zeros(D, D, device=dev)
-        self.B = {t: torch.zeros(D, TASK_N_CLASSES[t], device=dev) for t in TASKS}
-        self.sx = torch.zeros(D, device=dev)
-        self.sx2 = torch.zeros(D, device=dev)
-        self.n = 0
+def solve_ridge(state_dict, lam, task):
+    """Solve Ridge from saved Gram matrix."""
+    A = state_dict["A"].double()
+    sx = state_dict["sx"].double()
+    sx2 = state_dict["sx2"].double()
+    n = state_dict["n"]
+    B = state_dict[f"B_{task}"].double()
+    cc = state_dict[f"cc_{task}"].double()
+    D = A.shape[0]
 
-    @torch.no_grad()
-    def update(self, x, labels):
-        self.A.addmm_(x.T, x)
-        self.sx += x.sum(0)
-        self.sx2 += (x**2).sum(0)
-        self.n += x.shape[0]
-        for t in TASKS:
-            nc = TASK_N_CLASSES[t]
-            oh = torch.zeros(x.shape[0], nc, device=self.dev)
-            oh.scatter_(1, labels[t].unsqueeze(1), 1.0)
-            self.B[t].addmm_(x.T, oh)
+    mean = sx / n
+    var = (sx2 / n - mean**2).clamp(min=1e-8); std = var.sqrt(); inv = 1.0 / std
+    A_c = A - n * mean.unsqueeze(1) @ mean.unsqueeze(0)
+    A_z = A_c * inv.unsqueeze(1) * inv.unsqueeze(0)
+    mean_y = cc / n
+    B_c = B - n * mean.unsqueeze(1) @ mean_y.unsqueeze(0)
+    B_z = B_c * inv.unsqueeze(1)
+    W = torch.linalg.solve(A_z / n + lam * torch.eye(D, dtype=torch.float64), B_z / n)
+    return W.float(), mean_y.float(), mean.float(), std.float()
 
-    def solve(self, lam=1.0, task="age_bin"):
-        n = max(self.n, 1)
-        sx = self.sx.double(); sx2 = self.sx2.double()
-        A = self.A.double(); Bt = self.B[task].double()
-        mean = sx / n
-        var = (sx2 / n - mean**2).clamp(min=1e-8); std = var.sqrt(); inv = 1.0/std
-        A_c = A - n * mean.unsqueeze(1) @ mean.unsqueeze(0)
-        A_z = A_c * inv.unsqueeze(1) * inv.unsqueeze(0)
-        # class priors as bias
-        n_per_class = torch.zeros(TASK_N_CLASSES[task], device=self.dev, dtype=torch.float64)
-        for t_idx in range(TASK_N_CLASSES[task]):
-            n_per_class[t_idx] = (Bt[:, t_idx].sum()) if False else 0  # handled below
-        # B centering
-        cc = Bt.sum(0)  # class counts
-        mean_y = cc / n
-        B_c = Bt - n * mean.unsqueeze(1) @ mean_y.unsqueeze(0)
-        B_z = B_c * inv.unsqueeze(1)
-        W_z = torch.linalg.solve(A_z / n + lam * torch.eye(self.D, device=self.dev, dtype=torch.float64), B_z / n)
-        return W_z.float(), mean_y.float(), mean.float(), std.float()
+
+def find_best_lambda(ms, task):
+    """Find best ridge lambda from blog val results."""
+    val_path = BASE_DIR / "results" / f"{ms}_val_results.csv"
+    if not val_path.exists():
+        return 1.0
+    vdf = pd.read_csv(val_path)
+    ridge = vdf[(vdf["task"] == task) & (vdf["strategy"].str.startswith("ridge_"))]
+    if ridge.empty:
+        return 1.0
+    best = ridge.loc[ridge["text_balanced_acc"].idxmax()]
+    return float(best["strategy"].replace("ridge_", ""))
 
 
 def main():
@@ -164,24 +146,26 @@ def main():
     pa.add_argument("--model_name", required=True)
     pa.add_argument("--data_path", default=str(BASE_DIR / "data" / "processed" / "blog_corpus.parquet"))
     pa.add_argument("--output_dir", default=str(BASE_DIR / "results"))
-    pa.add_argument("--max_train_texts", type=int, default=0)
     pa.add_argument("--max_test_texts", type=int, default=10000)
     pa.add_argument("--batch_size", type=int, default=0)
-    pa.add_argument("--eval_layer_stride", type=int, default=4)
-    pa.add_argument("--ridge_lambda", type=float, default=1.0)
     args = pa.parse_args()
 
     ms = short(args.model_name)
     od = Path(args.output_dir)
-    od.mkdir(parents=True, exist_ok=True)
+    probe_dir = BASE_DIR / "probes" / ms
     out_file = od / f"{ms}_position_accuracy.csv"
 
     if out_file.exists():
         print(f"Already exists: {out_file}")
         return
 
-    if not Path(args.data_path).exists():
-        sys.exit(f"Data not found: {args.data_path}")
+    if not probe_dir.exists():
+        sys.exit(f"No probes for {ms} at {probe_dir}")
+
+    # Load and solve Ridge probes from saved Gram matrices
+    ridge_files = sorted(probe_dir.glob("L*_ridge.pt"))
+    if not ridge_files:
+        sys.exit(f"No ridge probes in {probe_dir}")
 
     print(f"Loading {args.model_name} ...")
     tok = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
@@ -192,88 +176,37 @@ def main():
                                                   device_map="auto", trust_remote_code=True)
     model.eval()
     cfg = model.config
-    if hasattr(cfg, 'text_config'):
-        cfg = cfg.text_config
-    hdim = cfg.hidden_size
-    nl = cfg.num_hidden_layers
-    elvs = eval_layers_list(nl, args.eval_layer_stride)
+    if hasattr(cfg, 'text_config'): cfg = cfg.text_config
+    hdim = cfg.hidden_size; nl = cfg.num_hidden_layers
     bs = args.batch_size if args.batch_size > 0 else auto_bs(model)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"  hdim={hdim}, layers={nl}, bs={bs}, eval_layers={elvs}")
 
-    col = make_collate(tok)
-
-    # ── PASS 1: Train Ridge probes ──────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"PASS 1: Training Ridge probes")
-    print(f"{'='*60}")
-
-    trn = BlogDS(args.data_path, "train")
-    if args.max_train_texts > 0 and len(trn) > args.max_train_texts:
-        torch.manual_seed(42)
-        trn = Subset(trn, torch.randperm(len(trn))[:args.max_train_texts].tolist())
-    print(f"  Training on {len(trn)} texts")
-
-    train_loader = DataLoader(trn, batch_size=bs, shuffle=True, num_workers=NUM_WORKERS,
-                              pin_memory=True, collate_fn=col, persistent_workers=True)
-
-    ridges = {l: Ridge(hdim, dev) for l in elvs}
-    capture = ActivationCapture(model, elvs, nl)
-
-    t0 = time.time()
-    for bn, (enc, labs) in enumerate(tqdm(train_loader, desc="Train Ridge")):
-        ids = enc["input_ids"].to(dev)
-        amask = enc["attention_mask"].to(dev)
-        try:
-            capture.clear()
-            with torch.no_grad():
-                get_inner_model(model)(input_ids=ids, attention_mask=amask)
-
-            bi, ti = torch.where(amask)
-            if bi.shape[0] == 0:
-                capture.clear(); continue
-
-            batch_labels = {t: labs[t].to(dev) for t in TASKS}
-            tlabs = {t: batch_labels[t][bi] for t in TASKS}
-
-            for l in elvs:
-                hs = capture.captured.get(l)
-                if hs is None: continue
-                acts = hs[bi, ti].float()
-                ridges[l].update(acts, tlabs)
-            capture.clear()
-        except torch.cuda.OutOfMemoryError:
-            capture.clear(); torch.cuda.empty_cache(); gc.collect()
-            continue
-        if bn % 500 == 0: gc.collect()
-
-    capture.remove()
-    print(f"  Training: {time.time()-t0:.0f}s")
-
-    # Solve
-    print("  Solving Ridge ...")
-    lam = args.ridge_lambda
-    ridge_sols = {}
-    for l in elvs:
+    # Solve Ridge for each layer × task
+    ridge_sols = {}  # (layer, task) -> (W, bias, mean, std)
+    elvs = []
+    for rf in ridge_files:
+        layer = int(rf.stem.split("_")[0][1:])
+        elvs.append(layer)
+        sd = torch.load(rf, map_location="cpu", weights_only=True)
         for t in TASKS:
-            W, bias, mean, std = ridges[l].solve(lam=lam, task=t)
-            ridge_sols[(l, t)] = (W.to(dev), bias.to(dev), mean.to(dev), std.to(dev))
-    del ridges; gc.collect()
-    print(f"  Solved {len(ridge_sols)} (layer, task) pairs")
+            if f"B_{t}" not in sd:
+                continue
+            lam = find_best_lambda(ms, t)
+            W, bias, mean, std = solve_ridge(sd, lam, t)
+            ridge_sols[(layer, t)] = (W.to(dev), bias.to(dev), mean.to(dev), std.to(dev))
+    elvs = sorted(set(elvs))
+    print(f"  {len(ridge_sols)} probe solutions across {len(elvs)} layers, bs={bs}")
 
-    # ── PASS 2: Position accuracy on test set ───────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"PASS 2: Position accuracy evaluation")
-    print(f"{'='*60}")
-
+    # Load test data
     tst = BlogDS(args.data_path, "test")
     if args.max_test_texts > 0 and len(tst) > args.max_test_texts:
         torch.manual_seed(42)
         tst = Subset(tst, torch.randperm(len(tst))[:args.max_test_texts].tolist())
-    print(f"  Evaluating on {len(tst)} texts")
+    print(f"  Test texts: {len(tst)}")
 
-    test_loader = DataLoader(tst, batch_size=bs, shuffle=False, num_workers=NUM_WORKERS,
-                             pin_memory=True, collate_fn=col, persistent_workers=True)
+    col = make_collate(tok)
+    loader = DataLoader(tst, batch_size=bs, shuffle=False, num_workers=NUM_WORKERS,
+                        pin_memory=True, collate_fn=col, persistent_workers=True)
 
     # Accumulate predictions per (layer, task, position_bin)
     results = {l: {t: {p: {"preds": [], "labels": []} for p in POSITION_BINS}
@@ -283,7 +216,7 @@ def main():
     capture = ActivationCapture(model, elvs, nl)
 
     t0 = time.time()
-    for bn, (enc, labs) in enumerate(tqdm(test_loader, desc="Position eval")):
+    for bn, (enc, labs) in enumerate(tqdm(loader, desc="Position eval")):
         ids = enc["input_ids"].to(dev)
         amask = enc["attention_mask"].to(dev)
         try:
@@ -294,19 +227,19 @@ def main():
             capture.clear(); torch.cuda.empty_cache(); gc.collect(); continue
 
         B, S = ids.shape
-        lengths = amask.sum(1)  # (B,)
+        lengths = amask.sum(1)
         batch_labels = {t: labs[t].to(dev) for t in TASKS}
 
         for l in elvs:
             hs = capture.captured.get(l)
             if hs is None: continue
-            hs = hs.float()  # (B, S, D)
+            hs = hs.float()
 
             for t in TASKS:
                 if (l, t) not in ridge_sols: continue
                 W, bias, mean, std = ridge_sols[(l, t)]
 
-                # Per-token logits: (B, S, C)
+                # Per-token logits
                 hs_z = (hs - mean) / (std + 1e-8)
                 tok_logits = hs_z @ W + bias  # (B, S, C)
 
@@ -328,7 +261,7 @@ def main():
         if bn % 200 == 0: gc.collect()
 
     capture.remove()
-    print(f"  Evaluation: {time.time()-t0:.0f}s")
+    print(f"  Eval: {time.time()-t0:.0f}s")
 
     # Compute balanced accuracy
     rows = []
@@ -339,29 +272,25 @@ def main():
                 if not d["labels"]: continue
                 acc = balanced_accuracy_score(d["labels"], d["preds"])
                 rows.append({
-                    "model_name": args.model_name,
-                    "task": t,
-                    "layer": l,
-                    "position_pct": pct,
-                    "accuracy": round(acc, 5),
+                    "model_name": args.model_name, "task": t, "layer": l,
+                    "position_pct": pct, "accuracy": round(acc, 5),
                     "n_texts": len(d["labels"]),
                 })
 
     df = pd.DataFrame(rows)
     df.to_csv(out_file, index=False)
-    print(f"\nSaved {out_file} ({len(df)} rows)")
+    print(f"Saved {out_file} ({len(df)} rows)")
 
     # Summary
     for t in TASKS:
         tdf = df[df["task"] == t]
-        if len(tdf) == 0: continue
+        if tdf.empty: continue
         full = tdf[tdf["position_pct"] == 1.0]
         if len(full) > 0:
             best = full.loc[full["accuracy"].idxmax()]
             early = tdf[(tdf["layer"] == best["layer"]) & (tdf["position_pct"] == 0.1)]
             early_acc = early["accuracy"].values[0] if len(early) > 0 else 0
-            print(f"  {t}: best layer L{int(best['layer'])} — "
-                  f"10%={early_acc:.3f}, 100%={best['accuracy']:.3f}")
+            print(f"  {t}: best L{int(best['layer'])} — 10%={early_acc:.3f}, 100%={best['accuracy']:.3f}")
 
     del model; torch.cuda.empty_cache(); gc.collect()
 
