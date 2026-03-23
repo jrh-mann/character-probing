@@ -74,11 +74,6 @@ def position_exists(model):
     return (BASE / "results" / f"{ms}_position_accuracy.csv").exists()
 
 
-def probe_exists(model):
-    ms = model_short(model)
-    return (BASE / "probes" / ms / "_COMPLETE").exists()
-
-
 def run_probes(model, ds_name, data_path, max_train, max_test, batch_size):
     ms = model_short(model)
     if ds_name == "blog":
@@ -121,9 +116,6 @@ def run_position(model, batch_size):
     ms = model_short(model)
     if position_exists(model):
         return True
-    if not probe_exists(model):
-        print(f"    No trained probes for {ms}, skipping position accuracy", flush=True)
-        return False
 
     cmd = [sys.executable, POS_SCRIPT,
            "--model_name", model,
