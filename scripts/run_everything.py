@@ -90,7 +90,7 @@ def run_probes(model, ds_name, data_path, max_train, max_test, batch_size):
            "--max_train_texts", max_train,
            "--max_test_texts", max_test]
 
-    log_dir = BASE / "results" / "logs" / "logs"
+    log_dir = BASE / "results" / "logs"
     os.makedirs(log_dir, exist_ok=True)
     log_file = log_dir / f"{ds_name}_{ms}.log"
 
@@ -123,7 +123,8 @@ def run_position(model, batch_size):
            "--output_dir", str(BASE / "results"),
            "--batch_size", str(batch_size)]
 
-    log_dir = BASE / "results" / "logs" / "logs"
+    log_dir = BASE / "results" / "logs"
+    os.makedirs(log_dir, exist_ok=True)
     log_file = log_dir / f"position_{ms}.log"
 
     print(f"    Position accuracy for {ms} ...", flush=True)
@@ -188,8 +189,7 @@ def main():
                 if not result_exists(model, ds_name):
                     tasks.append(("probe", ds_name, data_path, mt, mte))
 
-        if not args.skip_position and ds_name != "blog":
-            # Position accuracy only on blog dataset, only if probes exist
+        if not args.skip_position and "blog" not in missing_data:
             if not position_exists(model):
                 tasks.append(("position",))
 
@@ -214,35 +214,36 @@ def main():
         extra_str = f" + {', '.join(extras)}" if extras else ""
         print(f"  {ms} (bs={bs}): {ds_list}{extra_str}", flush=True)
 
-    # Execute
+    # Phase 1: Gap-filling probe runs (load model once, run all datasets, discard)
     successes, failures = 0, 0
-    for model, default_bs, tasks in work:
-        ms = model_short(model)
+    probe_work = [(m, bs, [t for t in tasks if t[0] == "probe"]) for m, bs, tasks in work]
+    probe_work = [(m, bs, tasks) for m, bs, tasks in probe_work if tasks]
+
+    if probe_work:
         print(f"\n{'='*60}", flush=True)
-        print(f"=== {ms} ({time.strftime('%H:%M:%S')}) ===", flush=True)
+        print(f"PHASE 1: GAP-FILLING PROBES ({sum(len(t) for _,_,t in probe_work)} runs)", flush=True)
         print(f"{'='*60}", flush=True)
 
+    for model, default_bs, tasks in probe_work:
+        ms = model_short(model)
+        print(f"\n  === {ms} ({time.strftime('%H:%M:%S')}) ===", flush=True)
         for task in tasks:
-            if task[0] == "probe":
-                _, ds_name, data_path, mt, mte = task
-                ok = run_probes(model, ds_name, data_path, mt, mte, default_bs)
-                if ok: successes += 1
-                else: failures += 1
-            elif task[0] == "position":
-                ok = run_position(model, default_bs)
-                if ok: successes += 1
-                else: failures += 1
-
+            _, ds_name, data_path, mt, mte = task
+            ok = run_probes(model, ds_name, data_path, mt, mte, default_bs)
+            if ok: successes += 1
+            else: failures += 1
         clear_cache()
 
-    # Classifier
+    # Phase 2: Classifier
     if not args.skip_classifier and Path(BLOG_DATA).exists():
         cls_result = BASE / "results" / "classifier_comparison.csv"
         if not cls_result.exists():
             print(f"\n{'='*60}", flush=True)
-            print(f"=== TRANSFORMER CLASSIFIER ({time.strftime('%H:%M:%S')}) ===", flush=True)
+            print(f"PHASE 2: TRANSFORMER CLASSIFIER ({time.strftime('%H:%M:%S')})", flush=True)
             print(f"{'='*60}", flush=True)
-            log_file = BASE / "results" / "logs" / "logs" / "classifier.log"
+            log_dir = BASE / "results" / "logs" / "logs"
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = log_dir / "classifier.log"
             with open(log_file, "w") as lf:
                 proc = subprocess.run([sys.executable, CLS_SCRIPT, "--max_train", "20000"],
                                       stdout=lf, stderr=subprocess.STDOUT, timeout=7200)
@@ -253,6 +254,21 @@ def main():
                 print("  Classifier: FAIL", flush=True)
                 failures += 1
             clear_cache()
+
+    # Phase 3: Position accuracy (load model, train Ridge from scratch, eval)
+    pos_work = [(m, bs) for m, bs, tasks in work if any(t[0] == "position" for t in tasks)]
+    if pos_work:
+        print(f"\n{'='*60}", flush=True)
+        print(f"PHASE 3: POSITION ACCURACY ({len(pos_work)} models)", flush=True)
+        print(f"{'='*60}", flush=True)
+
+    for model, default_bs in pos_work:
+        ms = model_short(model)
+        print(f"\n  === {ms} ({time.strftime('%H:%M:%S')}) ===", flush=True)
+        ok = run_position(model, default_bs)
+        if ok: successes += 1
+        else: failures += 1
+        clear_cache()
 
     print(f"\n{'='*60}", flush=True)
     print(f"ALL DONE: {successes} succeeded, {failures} failed", flush=True)
