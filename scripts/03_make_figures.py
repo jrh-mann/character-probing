@@ -24,9 +24,9 @@ FIGS.mkdir(parents=True, exist_ok=True)
 DATASETS = {
     "Blog Corpus":  ("",          ["age_bin", "gender"]),
     "Hippocorpus":  ("hippocorpus", ["age_bin", "gender"]),
-    "ELLIPSE":      ("ellipse",   ["age_bin", "gender"]),
+    "ELLIPSE":      ("ellipse",   ["gender"]),          # "age_bin" is school grade, not age
     "PRISM":        ("prism",     ["age_bin", "gender"]),
-    "Europarl":     ("europarl",  ["gender"]),  # age_bin is constant=1
+    "Europarl":     ("europarl",  ["gender"]),           # age_bin is constant=1
     "SynthPAI":     ("synthpai",  ["age_bin", "gender"]),
 }
 
