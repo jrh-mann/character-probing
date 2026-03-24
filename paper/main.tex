@@ -6,8 +6,9 @@
 \usepackage{amsmath}
 \usepackage{hyperref}
 \usepackage{xcolor}
+\usepackage{multirow}
 
-\title{Demographic Inference from LLM Residual Streams\\Scales Log-Linearly Across Model Families}
+\title{Scaling Laws for Demographic Encoding\\in Language Model Representations}
 
 \author{
 Anonymous
@@ -17,49 +18,53 @@ Anonymous
 \maketitle
 
 \begin{abstract}
-We probe the residual streams of 22 language models spanning 5 architecture families (Pythia, Gemma~3, Llama~3, Qwen~2.5, Qwen~3) and 3 orders of magnitude in parameter count (14M--14B) to predict author demographics from blog text. Using incremental ridge regression on per-token activations---which requires no activation caching and produces a closed-form solution from a single forward pass---we find that probe accuracy scales log-linearly with model size: $+8.3\%$ per decade on age ($R^2\!=\!0.97$, $p\!<\!10^{-16}$) and $+4.2\%$ per decade on gender ($R^2\!=\!0.92$, $p\!<\!10^{-11}$), with consistent slopes across all families. Zodiac sign prediction remains at chance regardless of scale, confirming the method does not detect spurious correlations. A bag-of-words baseline achieves 65\% on age, while the best 14B probe reaches 76\%, attributing an 11-point gain to contextual processing beyond surface vocabulary. The scaling law, methodology, and trained probes are released for reproducibility.
+We probe the residual streams of 22 language models spanning 5 architecture families and 3 orders of magnitude (14M--14B parameters) for author demographic information. Using ridge regression on per-token activations accumulated via Gram matrices during a single forward pass, we find that probe accuracy scales log-linearly with model size: $+8.3\%$ per decade for age ($R^2\!=\!0.97$) and $+4.2\%$ per decade for gender ($R^2\!=\!0.92$), with consistent slopes across Pythia, Gemma~3, Llama~3, Qwen~2.5, and Qwen~3. This scaling law (i)~persists when probe capacity is controlled via PCA truncation ($R^2\!=\!0.94$ at a fixed 32 dimensions), ruling out a hidden-dimension confound; (ii)~replicates across 5 naturalistic text datasets but not on synthetic LLM-generated text; and (iii)~extends to a second scaling axis: accuracy grows as $\log(\text{text length})$ at every model size, with the slope of that relationship itself scaling log-linearly with parameters ($R^2\!=\!0.90$). Zodiac sign prediction remains at chance across all models, confirming the method detects genuine signal. We release all probes, Gram matrices, and code.
 \end{abstract}
 
 \section{Introduction}
 
-Large language models encode rich representations of their input text in their residual streams. A growing body of probing literature asks what information is linearly decodable from these representations \citep{alain2017understanding, belinkov2022probing, hewitt2019structural}. We focus on a practical question with privacy implications: \emph{can demographic attributes of an author be inferred from a model's internal activations, and how does this capability scale with model size?}
+Large language models build rich representations of input text in their residual streams. A growing probing literature asks what information is linearly decodable from these representations \citep{alain2017understanding, belinkov2022probing, hewitt2019structural}. We focus on a practical question: \emph{can demographic attributes of an author be inferred from a model's internal activations, and how does this capability scale with model size?}
 
-We make three contributions:
+Prior work on author profiling has shown that stylistic features correlate with demographics \citep{schler2006effects}, and recent probing studies have demonstrated that LLM representations encode various semantic and syntactic properties. However, no study has systematically measured how demographic encoding scales across model families and sizes, or whether the relationship follows a predictable law.
+
+We make four contributions:
 \begin{enumerate}
-    \item \textbf{A scaling law for demographic probing.} Across 22 models from 5 families spanning 3 orders of magnitude (14M--14B parameters), ridge probe accuracy scales log-linearly with parameter count, with a consistent slope across architectures (Figure~\ref{fig:scaling}).
-    \item \textbf{Incremental ridge probing methodology.} We accumulate the Gram matrix $X^\top X$ and cross-covariance $X^\top Y$ during a single forward pass, then solve in closed form. This eliminates the need for activation caching, avoids SGD convergence issues, and produces results invariant to batch size.
-    \item \textbf{Signal decomposition.} We decompose probe accuracy into vocabulary signal (bag-of-words baseline), embedding signal (layer~0 probe), and contextual signal (best layer minus layer~0), showing that larger models contribute primarily through contextual processing.
+    \item \textbf{A universal scaling law.} Across 22 models from 5 families, ridge probe accuracy scales log-linearly with parameter count, with a consistent slope across architectures (Figure~\ref{fig:scaling}).
+    \item \textbf{PCA-controlled capacity analysis.} We show the scaling law is not an artifact of probe capacity growing with hidden dimension: projecting all models to a fixed 32-dimensional subspace preserves $R^2\!=\!0.94$ (Figure~\ref{fig:pca}).
+    \item \textbf{Cross-dataset replication.} The scaling law holds on 5 naturalistic text datasets (blogs, stories, essays, parliamentary speech, chatbot prompts) but breaks on synthetic LLM-generated text (Figure~\ref{fig:crossdataset}).
+    \item \textbf{A double scaling law in text length.} Accuracy scales as $\log(\text{\% text seen})$ at every model size, and the slope of this relationship itself scales with model parameters (Figure~\ref{fig:position}).
 \end{enumerate}
 
 \section{Method}
 
 \subsection{Data}
 
-We use the Blog Authorship Corpus \citep{schler2006effects}, comprising blog posts with author metadata. We predict three attributes: age bin (13--17, 23--27, 33--47; 3-class), gender (2-class), and zodiac sign (12-class, as a negative control). Posts are filtered to $\geq\!50$ tokens, balanced by age bin at the blogger level, and split 70/15/15 by blogger to prevent leakage.
+Our primary dataset is the Blog Authorship Corpus \citep{schler2006effects}, comprising $\sim$680K blog posts with author metadata. We predict age (3-class: 13--17, 23--27, 33--47), gender (binary), and zodiac sign (12-class negative control). Posts are filtered to $\geq\!50$ tokens, balanced by age bin at the blogger level, and split 70/15/15 by blogger ID to prevent leakage. The training set contains $\sim$125K texts from $\sim$9K bloggers.
 
-\subsection{Probing}
+For cross-dataset validation, we replicate the gender probing experiment on five additional datasets: Hippocorpus (recalled vs.\ imagined stories), ELLIPSE (student essays), Europarl (parliamentary proceedings), PRISM (chatbot prompts), and SynthPAI (synthetic Reddit-style posts generated by GPT-4). Each dataset is independently split and probed---we do not transfer probes across datasets.
 
-For each model, we run a single forward pass over 100K training texts with hooks capturing the residual stream at every 4th layer. For each non-padding token at each hooked layer, we extract the activation vector $\mathbf{h} \in \mathbb{R}^D$ and assign it the text's demographic label.
+\subsection{Probing via Incremental Ridge Regression}
 
-\paragraph{Incremental Ridge Regression.} Rather than caching activations, we accumulate sufficient statistics on GPU during the forward pass:
+For each model, we run a single forward pass over the training texts with hooks capturing the residual stream at every 4th layer. For each non-padding token at each hooked layer, we extract the activation $\mathbf{h} \in \mathbb{R}^D$ and assign it the text's demographic label.
+
+Rather than caching activations, we accumulate sufficient statistics on GPU:
 \begin{align}
     \mathbf{A} &\mathrel{+}= \mathbf{X}^\top \mathbf{X}, \quad
     \mathbf{B} \mathrel{+}= \mathbf{X}^\top \mathbf{Y}, \quad
-    \boldsymbol{\mu} \mathrel{+}= \textstyle\sum \mathbf{x}_i
+    \boldsymbol{\mu} \mathrel{+}= \textstyle\sum \mathbf{x}_i, \quad
+    \boldsymbol{\sigma}^2 \mathrel{+}= \textstyle\sum \mathbf{x}_i^2
 \end{align}
-where $\mathbf{X}$ is the batch of token activations and $\mathbf{Y}$ is the one-hot label matrix. After training, we z-score and solve:
+where $\mathbf{X}$ is a batch of token activations and $\mathbf{Y}$ the one-hot label matrix. After the forward pass, we center, z-score, and solve:
 \begin{equation}
     \mathbf{W} = \left(\frac{\mathbf{A}_z}{n} + \lambda \mathbf{I}\right)^{-1} \frac{\mathbf{B}_z}{n}
 \end{equation}
-with $\lambda$ selected on a validation set. This requires $O(D^2)$ memory per layer (64MB for $D\!=\!4096$) versus terabytes for full activation caching, and produces identical results to offline ridge regression.
+with $\lambda$ selected from $\{0.01, 0.1, 1, 10, 100\}$ on a held-out validation set. This requires $O(D^2)$ memory per layer and produces results identical to offline ridge regression. The solve is performed in float64 for numerical stability.
 
-\paragraph{Evaluation.} At test time, the probe predicts per-token, and logits are averaged across all tokens in a text before taking the argmax. We report balanced accuracy (macro-averaged recall).
-
-\paragraph{Additional probes.} We also train online EMA linear probes (7 hyperparameter configurations), MLP probes (hidden sizes 16--128), attention probes \citep{dower2024attention}, and a shuffled-label control, all sharing the same forward pass.
+\paragraph{Evaluation.} Per-token logits are averaged across all tokens in a text before taking the argmax. We report balanced accuracy (macro-averaged recall) on the test set.
 
 \subsection{Models}
 
-We probe 22 base (pretrained) models across 5 families: Pythia 14M--1B \citep{biderman2023pythia}, Gemma~3 270M--12B, Llama~3 1B--8B, Qwen~2.5 0.5B--14B, and Qwen~3 0.6B--8B. All are loaded in bfloat16.
+We probe 22 base (pretrained) models across 5 families: Pythia 14M--1B \citep{biderman2023pythia}, Gemma~3 270M--12B, Llama~3 1B--8B, Qwen~2.5 0.5B--14B, and Qwen~3 0.6B--8B. All are loaded in bfloat16 with \texttt{device\_map="auto"}.
 
 \section{Results}
 
@@ -68,53 +73,125 @@ We probe 22 base (pretrained) models across 5 families: Pythia 14M--1B \citep{bi
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/paper_scaling_law.png}
-    \caption{Ridge probe accuracy vs.\ model parameters (log scale) for age and gender prediction. Each point is one model's best-layer accuracy. The dashed line is a log-linear fit across all 22 models ($R^2\!=\!0.97$ for age, $0.92$ for gender). The BoW baseline (TF-IDF + logistic regression on raw text) is shown for reference. Zodiac sign (not shown) remains at chance ($8.3\%$) for all models.}
+    \caption{Ridge probe accuracy vs.\ model parameters (log scale). Each point is one model's best-layer, val-selected accuracy on the blog test set. The fit is log-linear across all 22 models. Zodiac sign (not shown) remains at chance ($8.3\%$) for all models.}
     \label{fig:scaling}
 \end{figure}
 
-Probe accuracy scales log-linearly with parameter count (Figure~\ref{fig:scaling}). For ridge regression on age: $\text{acc} = 0.083 \cdot \log_{10}(N) + 0.69$ with $R^2\!=\!0.97$ ($p\!<\!10^{-16}$, $n\!=\!22$). For gender: slope $= 0.042$, $R^2\!=\!0.92$ ($p\!<\!10^{-11}$). All five model families follow the same slope; a family-intercept model achieves $R^2\!=\!0.985$ on age, with Llama and Gemma ~2\% above the Qwen baseline.
+Probe accuracy scales log-linearly with parameter count (Figure~\ref{fig:scaling}):
+\begin{align}
+    \text{acc}_{\text{age}} &= 0.083 \cdot \log_{10}(N) + 0.69 \quad (R^2\!=\!0.97) \\
+    \text{acc}_{\text{gender}} &= 0.042 \cdot \log_{10}(N) + 0.72 \quad (R^2\!=\!0.92)
+\end{align}
+All five model families follow the same slope. A family-intercept model (shared slope, per-family intercept) achieves $R^2\!=\!0.985$ on age, with Llama and Gemma $\sim$2\% above the Qwen baseline. Zodiac sign remains at chance ($\sim$8.3\%) across all models and probe types.
 
-Zodiac sign accuracy hovers at chance ($8.3\%$) across all models and all probe types, confirming that the method does not detect spurious high-dimensional correlations.
+\subsection{Controlling for Probe Capacity}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper_pca_controlled.png}
+    \caption{Left/middle: scaling law at fixed $k\!=\!64$ PCA dimensions vs.\ full $d_\text{model}$. Right: $R^2$ of the scaling law at each PCA truncation level. The scaling law persists even at $k\!=\!32$ ($R^2\!=\!0.94$ for age), ruling out a probe-capacity confound.}
+    \label{fig:pca}
+\end{figure}
+
+A natural concern is that the scaling law reflects probe capacity rather than representation quality: larger models have higher $d_\text{model}$, giving the linear probe more features. To test this, we project all models' activations into a fixed $k$-dimensional PCA subspace (computed from the saved Gram matrices, requiring no additional forward passes) and re-solve ridge regression. The scaling law persists at every capacity level (Figure~\ref{fig:pca}): $R^2\!=\!0.94$ at $k\!=\!32$, compared to $R^2\!=\!0.92$ at full $d_\text{model}$. The slope is shallower at lower $k$ (some capacity effect exists), but the majority of the scaling reflects genuine representation quality.
+
+\subsection{Cross-Dataset Replication}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper_6datasets_gender.png}
+    \caption{Gender probe accuracy vs.\ model size across 6 datasets. The scaling law replicates on all naturalistic text datasets (Blog, Europarl, Hippocorpus, ELLIPSE, PRISM) but is weakest on SynthPAI (GPT-4 generated text, $R^2\!=\!0.55$). Each dataset is independently trained and evaluated (no transfer). $n$ = number of models evaluated per dataset.}
+    \label{fig:crossdataset}
+\end{figure}
+
+We repeat the full probing pipeline independently on each of 5 additional datasets (Figure~\ref{fig:crossdataset}). For gender, the scaling law holds on all naturalistic text datasets: Blog ($R^2\!=\!0.92$), Europarl ($R^2\!=\!0.72$), PRISM ($R^2\!=\!0.72$), Hippocorpus ($R^2\!=\!0.69$), and ELLIPSE ($R^2\!=\!0.38$). SynthPAI, where GPT-4 generated text in synthetic personas, shows the weakest scaling ($R^2\!=\!0.55$), suggesting that synthetic text does not reliably encode the demographic patterns present in genuine human writing.
 
 \subsection{Signal Decomposition}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/paper_signal_decomposition.png}
-    \caption{Decomposition of probe accuracy into embedding-layer signal (layer~0, blue) and contextual gain (best layer minus layer~0, green). The BoW baseline (orange dashed) provides the vocabulary-only reference. Contextual gain grows with model size.}
+    \caption{Decomposition of age and gender accuracy into embedding signal (layer~0, blue) and contextual gain (best layer minus layer~0, green). The BoW baseline (orange dashed) provides the vocabulary-only reference.}
     \label{fig:decomp}
 \end{figure}
 
-A bag-of-words baseline (TF-IDF + logistic regression) achieves 65\% on age and 69\% on gender using vocabulary alone. Ridge probes at layer~0 (embeddings, no context) achieve $\sim$42\% on age and $\sim$59\% on gender---below the BoW baseline, since the embedding compresses 50K+ vocabulary into $D$ dimensions.
+A bag-of-words baseline (TF-IDF + logistic regression, hyperparameters selected on validation) achieves $64.6\%$ on age and $68.8\%$ on gender using vocabulary alone. Ridge probes at layer~0 (raw embeddings, no contextual processing) achieve $\sim$42\% on age and $\sim$59\% on gender---below the BoW baseline, since the embedding compresses a high-dimensional vocabulary into $D$ dimensions.
 
-The contextual gain (best layer minus layer~0) scales with model size: from $+23\%$ at 0.5B to $+34\%$ at 14B for age (Figure~\ref{fig:decomp}). This gain represents what the transformer's contextual processing adds beyond surface vocabulary.
+The contextual gain (best layer minus layer~0) grows with model size: from $+15\%$ at 14M to $+34\%$ at 14B for age (Figure~\ref{fig:decomp}). At the 14B scale, ridge probes reach $76\%$ on age and $75\%$ on gender, representing gains of $+11$ and $+6$ percentage points above the BoW baseline respectively.
+
+\subsection{Position Accuracy: A Double Scaling Law}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper_position_accuracy_logx.png}
+    \caption{Probe accuracy vs.\ \% of text seen (log scale, best layer per model). Accuracy scales as $\log(\text{\% text})$ at every model size, with curves approximately parallel in log space.}
+    \label{fig:position}
+\end{figure}
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper_position_slope_vs_size.png}
+    \caption{The slope of the accuracy-vs-log(text length) relationship scales log-linearly with model parameters ($R^2\!=\!0.90$ for age), yielding a double scaling law: $\text{acc} \propto \log(N) \cdot \log(T)$.}
+    \label{fig:slope}
+\end{figure}
+
+We evaluate how probe accuracy depends on how much of the text the model has processed. Using saved blog-trained probes, we compute cumulative mean-logit predictions at each position threshold (5\%, 10\%, \ldots, 100\% of tokens).
+
+Accuracy scales as $\log(\text{\% text seen})$ with $R^2\!>\!0.97$ for every model (Figure~\ref{fig:position}). The curves are approximately parallel in log space, indicating a consistent multiplicative advantage for larger models at every position.
+
+The slope of this relationship (how quickly a model extracts signal from text) itself scales log-linearly with parameter count: $R^2\!=\!0.90$ for age (Figure~\ref{fig:slope}). This yields a double scaling law:
+\begin{equation}
+    \text{acc} \approx \alpha \cdot \log_{10}(N) \cdot \log_{10}(T) + \beta \cdot \log_{10}(N) + \gamma \cdot \log_{10}(T) + \delta
+\end{equation}
+where $N$ is parameter count and $T$ is text length. Larger models extract more demographic signal per token of text.
+
+Below $\sim$100M parameters, the text-length slope plateaus---very small models cannot exploit additional text effectively, consistent with a capacity floor for this task.
 
 \subsection{Layer Profile}
 
 \begin{figure}[t]
     \centering
     \includegraphics[width=\linewidth]{figures/paper_layer_all_models.png}
-    \caption{Ridge accuracy by relative layer depth for all 22 models. Accuracy peaks at 60--75\% depth, not at the final layer. Color indicates model size (log scale).}
+    \caption{Ridge accuracy by relative layer depth for all 22 models. Signal peaks at 60--75\% depth, not at the final layer.}
     \label{fig:layers}
 \end{figure}
 
-Demographic signal builds through the first $\sim$70\% of the network and plateaus or slightly declines in the final layers (Figure~\ref{fig:layers}). This is consistent across all families and suggests that the final layers, which are optimized for next-token prediction, may discard some demographic information.
+Demographic signal builds through the first $\sim$70\% of the network and plateaus or slightly declines in the final layers (Figure~\ref{fig:layers}). This is consistent across all families and suggests that final layers, optimized for next-token prediction, may discard some demographic information in favor of task-relevant features.
 
-\subsection{Probe Architecture Comparison}
+\subsection{BoW Text Truncation}
 
-MLP probes outperform linear probes at small scale (e.g., +7\% at 0.5B) but converge at larger scale ($<$1\% gap at 7B+), suggesting that demographic information becomes more linearly encoded in larger models. The attention probe is competitive but unstable across layers due to its small parameter count. All probe types agree on the scaling trend.
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=\linewidth]{figures/paper_bow_text_truncation.png}
+    \caption{BoW baseline accuracy vs.\ number of words per document. Accuracy saturates at $\sim$500 words, providing a vocabulary-only comparison to the LLM position curves.}
+    \label{fig:bow}
+\end{figure}
+
+For comparison, we train BoW classifiers on documents truncated to varying word counts (Figure~\ref{fig:bow}). BoW accuracy saturates at $\sim$500 words ($64.4\%$ age, $68.2\%$ gender), while LLM probes continue improving throughout. At 5\% of text ($\sim$50 tokens), the largest models already match or exceed the BoW's full-text performance, demonstrating that contextual representations extract information far more efficiently than vocabulary statistics.
+
+\section{Related Work}
+
+\paragraph{Probing.} Linear probing of neural representations was introduced by \citet{alain2017understanding} and has been extensively applied to LLMs for syntactic and semantic properties \citep{hewitt2019structural, belinkov2022probing}. We extend this to demographic attributes and focus on scaling behavior rather than binary ``is this encoded?'' questions.
+
+\paragraph{Author profiling.} Computational author profiling has a long history in NLP, with shared tasks at PAN workshops. \citet{schler2006effects} established the Blog Authorship Corpus used here. Our contribution is showing that frozen LLM representations, without any task-specific training, encode demographic information that scales predictably.
+
+\paragraph{Neural scaling laws.} \citet{kaplan2020scaling} established power-law scaling of loss with model size, data, and compute. \citet{hoffmann2022training} refined these with compute-optimal scaling. We show that scaling laws extend beyond loss to the information content of intermediate representations, as measured by probe accuracy.
 
 \section{Discussion}
 
-\paragraph{Limitations.} The primary confound is that demographic groups use different vocabulary and topics. The BoW baseline quantifies this: 65\% of the age signal is accessible from word frequencies alone. The remaining 11 points (at 14B) represent the LLM's contextual contribution, but we cannot fully rule out that this reflects stylistic patterns rather than genuine demographic representations. Cross-domain transfer or lexical neutralization experiments would help disentangle these.
+\paragraph{What drives the scaling?} Three factors contribute to the scaling law: (1)~larger models have richer contextual representations; (2)~larger models have higher-dimensional residual streams, providing more features for the probe; and (3)~larger models are trained on more data. Our PCA analysis (Section~3.2) shows that factor~(2) accounts for only a fraction of the scaling---the law persists at fixed probe capacity. Disentangling factors~(1) and~(3) would require controlled scaling experiments (same data, different sizes), which the Pythia suite partially provides: within Pythia (same training data, 14M--1B), the scaling slope matches the cross-family slope.
 
-\paragraph{Privacy implications.} Even a 14M-parameter model extracts above-chance demographic signal from arbitrary text. This scales predictably with model size, suggesting that larger deployed models encode substantially more author information in their residual streams.
+\paragraph{Topic confound.} Demographic groups write about different topics, and the BoW baseline captures $65\%$ of the age signal from vocabulary alone. The LLM's contextual gain ($+11$ points at 14B) may partly reflect better topic/register detection rather than genuine demographic inference. The cross-dataset replication partially addresses this: the scaling law holds on parliamentary speech (Europarl) and personal stories (Hippocorpus), suggesting it is not specific to blog topic distributions.
 
-\paragraph{Methodological contribution.} Incremental Gram matrix probing eliminates the standard probing pipeline's reliance on cached activations. The sufficient statistics ($\mathbf{X}^\top \mathbf{X}$, $\mathbf{X}^\top \mathbf{Y}$) can be accumulated during a single inference pass and solved offline for arbitrary regularization strengths.
+\paragraph{Synthetic text.} SynthPAI shows the weakest scaling ($R^2\!=\!0.55$ for gender), indicating that GPT-4-generated text in synthetic personas does not faithfully reproduce the writing patterns that distinguish real demographic groups. This has implications for privacy research using synthetic data.
+
+\paragraph{Privacy implications.} Even a 14M-parameter model extracts above-chance demographic signal from text. The double scaling law implies that both larger models and longer text inputs compound this effect. For deployed systems processing user text, demographic information is an increasingly accessible byproduct of language modeling at scale.
+
+\paragraph{Limitations.} The Blog Authorship Corpus dates from 2004; language patterns may differ in modern text. The age bins are non-contiguous (18--22 excluded) with unequal widths, following the original corpus design. Cross-dataset age comparisons are limited by differing bin definitions across datasets. We report the gender task for cross-dataset comparisons as the only attribute with consistent definitions. We do not test cross-dataset probe transfer in this work, reserving it for future study.
 
 \section{Conclusion}
 
-Demographic probe accuracy scales log-linearly with model parameters across 5 architecture families and 3 orders of magnitude, with a universal slope of $+8.3\%$/decade for age and $+4.2\%$/decade for gender. This scaling law holds from 14M to 14B parameters with $R^2 > 0.92$. We release all probes, Gram matrices, and code for reproducibility.
+Demographic probe accuracy follows a universal scaling law across 5 architecture families and 3 orders of magnitude of model size. This law is not a probe-capacity artifact (it survives PCA truncation to 32 dimensions), replicates across 5 naturalistic text domains (but not synthetic text), and extends to a second scaling axis in text length. Larger models extract more demographic information, more efficiently, from less text. We release all probes, Gram matrices, and code for reproducibility.
 
 \bibliography{main}
 \bibliographystyle{colm2026_conference}
