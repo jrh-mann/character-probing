@@ -137,8 +137,9 @@ class Ridge:
 
     def solve(self, lam=1.0, task="age_bin"):
         n = max(self.n, 1)
-        A = self.A.double(); sx = self.sx.double(); sx2 = self.sx2.double()
-        Bt = self.B[task].double(); cc = self.cc[task].double()
+        # Solve on CPU in float64 (MPS doesn't support float64)
+        A = self.A.cpu().double(); sx = self.sx.cpu().double(); sx2 = self.sx2.cpu().double()
+        Bt = self.B[task].cpu().double(); cc = self.cc[task].cpu().double()
         mean = sx / n
         var = (sx2 / n - mean**2).clamp(min=1e-8); std = var.sqrt(); inv = 1.0/std
         A_c = A - n * mean.unsqueeze(1) @ mean.unsqueeze(0)
@@ -146,7 +147,7 @@ class Ridge:
         mean_y = cc / n
         B_c = Bt - n * mean.unsqueeze(1) @ mean_y.unsqueeze(0)
         B_z = B_c * inv.unsqueeze(1)
-        W = torch.linalg.solve(A_z / n + lam * torch.eye(self.D, device=self.dev, dtype=torch.float64), B_z / n)
+        W = torch.linalg.solve(A_z / n + lam * torch.eye(self.D, dtype=torch.float64), B_z / n)
         return W.float(), mean_y.float(), mean.float(), std.float()
 
 
@@ -157,9 +158,13 @@ def run_checkpoint(model_name, revision, n_params, train_loader, test_loader, de
     tok.padding_side = "right"
     if tok.pad_token is None: tok.pad_token = tok.eos_token
 
+    load_dtype = torch.float16 if dev in ("mps", "cuda") else torch.float32
+    device_map = "auto" if dev == "cuda" else None
     model = AutoModelForCausalLM.from_pretrained(
-        model_name, revision=revision, dtype=torch.bfloat16,
-        device_map="auto", trust_remote_code=True)
+        model_name, revision=revision, dtype=load_dtype,
+        device_map=device_map, trust_remote_code=True)
+    if device_map is None:
+        model = model.to(dev)
     model.eval()
 
     cfg = model.config
@@ -188,8 +193,14 @@ def run_checkpoint(model_name, revision, n_params, train_loader, test_loader, de
                 if hs is None: continue
                 ridges[l].update(hs[bi, ti].float(), tlabs)
             capture.clear()
-        except torch.cuda.OutOfMemoryError:
-            capture.clear(); torch.cuda.empty_cache(); gc.collect()
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            if "out of memory" in str(e).lower() or "MPS" in str(e):
+                print(f" [OOM train batch {bn}]", end="", flush=True)
+            else:
+                raise
+            capture.clear()
+            if dev == "cuda": torch.cuda.empty_cache()
+            gc.collect()
 
     # Solve for all lambdas
     solutions = {}  # (layer, task, lam) -> (W, bias, mean, std)
@@ -210,8 +221,14 @@ def run_checkpoint(model_name, revision, n_params, train_loader, test_loader, de
             capture.clear()
             with torch.no_grad():
                 get_inner_model(model)(input_ids=ids, attention_mask=amask)
-        except torch.cuda.OutOfMemoryError:
-            capture.clear(); torch.cuda.empty_cache(); gc.collect(); continue
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+            if "out of memory" in str(e).lower() or "MPS" in str(e):
+                print(f" [OOM eval]", end="", flush=True)
+            else:
+                raise
+            capture.clear()
+            if dev == "cuda": torch.cuda.empty_cache()
+            gc.collect(); continue
 
         B, S = ids.shape
         bi, ti = torch.where(amask)
@@ -236,7 +253,9 @@ def run_checkpoint(model_name, revision, n_params, train_loader, test_loader, de
         capture.clear()
 
     capture.remove()
-    del model; torch.cuda.empty_cache(); gc.collect()
+    del model
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
+    gc.collect()
 
     # Compute accuracy, pick best lambda per (layer, task)
     rows = []
@@ -270,7 +289,13 @@ def main():
     pa.add_argument("--checkpoints", nargs="*", type=int, help="Only these steps")
     args = pa.parse_args()
 
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        dev = "cuda"
+    elif torch.backends.mps.is_available():
+        dev = "mps"
+    else:
+        dev = "cpu"
+    print(f"Device: {dev}")
     out_file = BASE_DIR / "results" / "training_dynamics.csv"
 
     # Load existing results to skip completed
@@ -311,12 +336,15 @@ def main():
         if tok.pad_token is None: tok.pad_token = tok.eos_token
         col = make_collate(tok)
 
+        pin = dev == "cuda"
+        nw = NUM_WORKERS if dev == "cuda" else 0
+        pw = nw > 0
         train_loader = DataLoader(trn, batch_size=args.batch_size, shuffle=True,
-                                  num_workers=NUM_WORKERS, pin_memory=True,
-                                  collate_fn=col, persistent_workers=True)
+                                  num_workers=nw, pin_memory=pin,
+                                  collate_fn=col, persistent_workers=pw)
         test_loader = DataLoader(tst, batch_size=args.batch_size, shuffle=False,
-                                 num_workers=NUM_WORKERS, pin_memory=True,
-                                 collate_fn=col, persistent_workers=True)
+                                 num_workers=nw, pin_memory=pin,
+                                 collate_fn=col, persistent_workers=pw)
 
         for step in checkpoints:
             revision = f"step{step}"
@@ -348,9 +376,18 @@ def main():
 
             except Exception as e:
                 print(f" FAILED: {e}")
-                torch.cuda.empty_cache(); gc.collect()
+                if torch.cuda.is_available(): torch.cuda.empty_cache()
+                gc.collect()
 
-        # Clear model cache between sizes
+            # Delete this checkpoint's snapshot to save disk
+            import shutil as _shutil
+            cache = Path(os.environ.get("HF_HOME", str(BASE_DIR / "hf_cache"))) / "hub"
+            if cache.exists():
+                for snap_dir in cache.glob("models--*/snapshots/*"):
+                    if snap_dir.is_dir() and snap_dir.name != "main":
+                        _shutil.rmtree(snap_dir, ignore_errors=True)
+
+        # Clear model cache between sizes — delete ALL checkpoints for this model
         import shutil
         cache = Path(os.environ.get("HF_HOME", "")) / "hub"
         if cache.exists():
